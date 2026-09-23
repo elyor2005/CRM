@@ -1,0 +1,148 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum ItemCategory {
+  FINISHED_GOOD
+  RAW_MATERIAL
+  PACKAGING
+}
+
+enum SaleType {
+  SALE
+  RETURN
+}
+
+enum FinanceType {
+  INCOME
+  EXPENSE
+}
+
+enum StockMovementType {
+  PRODUCTION_IN
+  PRODUCTION_CONSUME
+  SALE_OUT
+  RETURN_IN
+  DEFECT
+  BONUS
+  ADJUSTMENT
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model Client {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  phone     String?
+  address   String?
+  createdAt DateTime @default(now())
+
+  sales          Sale[]
+  payments       Payment[]
+  financeEntries FinanceEntry[]
+}
+
+model InventoryItem {
+  id        String       @id @default(cuid())
+  name      String       @unique
+  category  ItemCategory
+  unit      String       @default("шт")
+  quantity  Decimal      @default(0) @db.Decimal(12, 3)
+  costPrice Decimal      @default(0) @db.Decimal(14, 2)
+  salePrice Decimal?     @db.Decimal(14, 2)
+
+  saleItems      SaleItem[]
+  stockMovements StockMovement[]
+
+  // Recipe: this item as a finished product
+  recipeLines RecipeLine[] @relation("Product")
+  // Recipe: this item as an ingredient
+  usedIn      RecipeLine[] @relation("Ingredient")
+}
+
+model RecipeLine {
+  productId    String
+  ingredientId String
+  qtyPerUnit   Decimal @db.Decimal(12, 3)
+
+  product    InventoryItem @relation("Product", fields: [productId], references: [id], onDelete: Cascade)
+  ingredient InventoryItem @relation("Ingredient", fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  @@id([productId, ingredientId])
+}
+
+model Sale {
+  id        String   @id @default(cuid())
+  date      DateTime @default(now())
+  type      SaleType
+  clientId  String
+  payment   Decimal  @default(0) @db.Decimal(14, 2)
+  createdAt DateTime @default(now())
+
+  client  Client     @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  items   SaleItem[]
+  finance FinanceEntry[]
+}
+
+model SaleItem {
+  id         String  @id @default(cuid())
+  saleId     String
+  productId  String
+  quantity   Decimal @db.Decimal(12, 3)
+  unitPrice  Decimal @db.Decimal(14, 2)
+  lineTotal  Decimal @db.Decimal(14, 2)
+  isFreebie  Boolean @default(false)
+  freebieFor String?
+
+  sale    Sale          @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product InventoryItem @relation(fields: [productId], references: [id], onDelete: Restrict)
+}
+
+model Payment {
+  id       String   @id @default(cuid())
+  clientId String
+  amount   Decimal  @db.Decimal(14, 2)
+  date     DateTime @default(now())
+  note     String?
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+}
+
+model FinanceEntry {
+  id              String      @id @default(cuid())
+  date            DateTime    @default(now())
+  type            FinanceType
+  description     String
+  amount          Decimal     @db.Decimal(14, 2)
+  relatedClientId String?
+  relatedSaleId   String?
+
+  relatedClient Client? @relation(fields: [relatedClientId], references: [id], onDelete: SetNull)
+  relatedSale   Sale?   @relation(fields: [relatedSaleId], references: [id], onDelete: SetNull)
+}
+
+model StockMovement {
+  id       String            @id @default(cuid())
+  itemId   String
+  type     StockMovementType
+  quantity Decimal           @db.Decimal(12, 3)
+  date     DateTime          @default(now())
+  note     String?
+
+  item InventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+}
+
+model LiabilityEntry {
+  id     String   @id @default(cuid())
+  name   String
+  amount Decimal  @db.Decimal(14, 2)
+  date   DateTime @default(now())
+}
