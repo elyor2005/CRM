@@ -71,7 +71,7 @@ export async function getClientsWithDebt() {
         orderBy: { date: "desc" },
       });
 
-      let totalSalesDebt = 0;
+      let totalSalesValue = 0;
       let totalPaymentsOnSales = 0;
       let lastSaleDate: Date | null = null;
       let last30DaysSalesSum = 0;
@@ -83,10 +83,10 @@ export async function getClientsWithDebt() {
         );
 
         if (sale.type === "SALE") {
-          totalSalesDebt += saleTotal;
+          totalSalesValue += saleTotal;
         } else {
           // RETURN reduces debt
-          totalSalesDebt -= saleTotal;
+          totalSalesValue -= saleTotal;
         }
 
         totalPaymentsOnSales += Number(sale.payment);
@@ -107,11 +107,14 @@ export async function getClientsWithDebt() {
       });
       const totalStandalonePayments = Number(payments._sum.amount || 0);
 
-      const debt = totalSalesDebt - totalPaymentsOnSales - totalStandalonePayments;
+      const debt = totalSalesValue - totalPaymentsOnSales - totalStandalonePayments;
+      const totalPaid = totalPaymentsOnSales + totalStandalonePayments;
 
       return {
         ...client,
         debt,
+        totalSalesValue,
+        totalPaid,
         lastSaleDate,
         last30DaysSalesSum,
       };
@@ -171,4 +174,83 @@ export async function getClientDebt(clientId: string) {
   const totalStandalonePayments = Number(payments._sum.amount || 0);
 
   return totalSalesDebt - totalPaymentsOnSales - totalStandalonePayments;
+}
+
+/**
+ * Get detailed client stats including debt aging
+ */
+export async function getClientDetailedStats(clientId: string) {
+  const [sales, payments] = await Promise.all([
+    prisma.sale.findMany({
+      where: { clientId },
+      include: { items: { include: { product: true } } },
+      orderBy: { date: "desc" },
+    }),
+    prisma.payment.findMany({
+      where: { clientId },
+      orderBy: { date: "desc" },
+    }),
+  ]);
+
+  const now = new Date();
+  let totalSalesValue = 0;
+  let totalPaymentsOnSales = 0;
+  let lastSaleDate: Date | null = null;
+
+  // Debt aging: track unpaid amounts per age bucket
+  const debtAging = { days0to7: 0, days8to30: 0, days31to60: 0, days60plus: 0 };
+
+  for (const sale of sales) {
+    if (sale.type !== "SALE") continue;
+    const saleTotal = sale.items.reduce(
+      (sum, item) => sum + Number(item.lineTotal),
+      0
+    );
+    totalSalesValue += saleTotal;
+    totalPaymentsOnSales += Number(sale.payment);
+
+    if (!lastSaleDate || sale.date > lastSaleDate) {
+      lastSaleDate = sale.date;
+    }
+
+    // Unpaid portion of this sale
+    const unpaid = saleTotal - Number(sale.payment);
+    if (unpaid > 0) {
+      const daysSince = Math.floor((now.getTime() - new Date(sale.date).getTime()) / (1000 * 60 * 60 * 24));
+      if (daysSince <= 7) debtAging.days0to7 += unpaid;
+      else if (daysSince <= 30) debtAging.days8to30 += unpaid;
+      else if (daysSince <= 60) debtAging.days31to60 += unpaid;
+      else debtAging.days60plus += unpaid;
+    }
+  }
+
+  // Add return adjustments to sales value
+  for (const sale of sales) {
+    if (sale.type !== "RETURN") continue;
+    const returnTotal = sale.items.reduce(
+      (sum, item) => sum + Number(item.lineTotal),
+      0
+    );
+    totalSalesValue -= returnTotal;
+    totalPaymentsOnSales += Number(sale.payment);
+  }
+
+  const totalStandalonePayments = payments.reduce(
+    (sum, p) => sum + Number(p.amount),
+    0
+  );
+
+  const totalPaid = totalPaymentsOnSales + totalStandalonePayments;
+  const currentDebt = totalSalesValue - totalPaid;
+
+  return {
+    totalSalesValue,
+    totalPaid,
+    currentDebt,
+    lastSaleDate,
+    debtAging,
+    salesCount: sales.filter((s) => s.type === "SALE").length,
+    returnsCount: sales.filter((s) => s.type === "RETURN").length,
+    paymentsCount: payments.length,
+  };
 }

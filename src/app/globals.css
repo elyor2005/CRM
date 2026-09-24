@@ -1,25 +1,42 @@
 @import "tailwindcss";
 
-/* ─── Design Tokens & Theme Variables ────────────────────────────────────── */
+/* ─── CRM Design System Tokens & CSS Variables ───────────────────────────── */
 
 :root {
-  --bg-primary: #F2F2F7;
-  --bg-secondary: #FFFFFF;
-  --bg-tertiary: #F9F9FB;
+  /* Canvas & Elevation */
+  --bg-canvas: #F4F6F8;
+  --bg-surface: #FFFFFF;
+  --bg-surface-hover: #F8FAFC;
+  --bg-subtle: #EDF2F7;
+  --bg-input: #F1F5F9;
 
-  --text-primary: #1C1C1E;
-  --text-secondary: #8E8E93;
-  --text-tertiary: #C7C7CC;
-  --text-link: #007AFF;
+  /* Typography Colors */
+  --text-primary: #0F172A;
+  --text-secondary: #64748B;
+  --text-tertiary: #94A3B8;
+  --text-inverted: #FFFFFF;
 
-  --accent-blue: #007AFF;
-  --accent-green: #34C759;
-  --accent-red: #FF3B30;
-  --accent-orange: #FF9500;
-  --accent-purple: #AF52DE;
+  /* Brand Primary Accent (Purpose-built Fintech Indigo) */
+  --accent-primary: #4F46E5;
+  --accent-primary-hover: #4338CA;
+  --accent-primary-subtle: rgba(79, 70, 229, 0.1);
 
-  --separator: rgba(60, 60, 67, 0.12);
-  --fill-tertiary: rgba(120, 120, 128, 0.12);
+  /* Semantic Financial Tones (Tested Contrast) */
+  --color-income: #059669;
+  --color-income-subtle: rgba(5, 150, 105, 0.1);
+
+  --color-expense: #E11D48;
+  --color-expense-subtle: rgba(225, 29, 72, 0.1);
+
+  --color-debt: #D97706;
+  --color-debt-subtle: rgba(217, 119, 6, 0.1);
+
+  --color-warning: #D97706;
+  --color-warning-subtle: rgba(217, 119, 6, 0.1);
+
+  /* Borders & Dividers */
+  --border-subtle: rgba(15, 23, 42, 0.08);
+  --border-strong: rgba(15, 23, 42, 0.16);
 
   --font-system: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", sans-serif;
 
@@ -29,43 +46,53 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg-primary: #000000;
-    --bg-secondary: #1C1C1E;
-    --bg-tertiary: #2C2C2E;
+    /* Canvas & Elevation */
+    --bg-canvas: #0B0E14;
+    --bg-surface: #131823;
+    --bg-surface-hover: #1A202C;
+    --bg-subtle: #171E2E;
+    --bg-input: #1E2638;
 
-    --text-primary: #FFFFFF;
-    --text-secondary: #98989D;
-    --text-tertiary: #48484A;
-    --text-link: #0A84FF;
+    /* Typography Colors */
+    --text-primary: #F8FAFC;
+    --text-secondary: #94A3B8;
+    --text-tertiary: #64748B;
+    --text-inverted: #0F172A;
 
-    --accent-blue: #0A84FF;
-    --accent-green: #30D158;
-    --accent-red: #FF453A;
-    --accent-orange: #FF9F0A;
-    --accent-purple: #BF5AF2;
+    /* Brand Primary Accent */
+    --accent-primary: #6366F1;
+    --accent-primary-hover: #818CF8;
+    --accent-primary-subtle: rgba(99, 102, 241, 0.15);
 
-    --separator: rgba(84, 84, 88, 0.36);
-    --fill-tertiary: rgba(120, 120, 128, 0.24);
+    /* Semantic Financial Tones */
+    --color-income: #10B981;
+    --color-income-subtle: rgba(16, 185, 129, 0.15);
+
+    --color-expense: #FB7185;
+    --color-expense-subtle: rgba(251, 113, 133, 0.15);
+
+    --color-debt: #F97316;
+    --color-debt-subtle: rgba(249, 115, 22, 0.15);
+
+    --color-warning: #F59E0B;
+    --color-warning-subtle: rgba(245, 158, 11, 0.15);
+
+    /* Borders & Dividers */
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.16);
   }
 }
 
 /* ─── Tailwind v4 Integration ───────────────────────────────────────────── */
 
 @theme inline {
-  --color-bg-primary: var(--bg-primary);
-  --color-bg-secondary: var(--bg-secondary);
-  --color-bg-tertiary: var(--bg-tertiary);
+  --color-bg-canvas: var(--bg-canvas);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-subtle: var(--bg-subtle);
   --color-text-primary: var(--text-primary);
   --color-text-secondary: var(--text-secondary);
   --color-text-tertiary: var(--text-tertiary);
-  --color-text-link: var(--text-link);
-  --color-accent-blue: var(--accent-blue);
-  --color-accent-green: var(--accent-green);
-  --color-accent-red: var(--accent-red);
-  --color-accent-orange: var(--accent-orange);
-  --color-accent-purple: var(--accent-purple);
-  --color-separator: var(--separator);
-  --color-fill-tertiary: var(--fill-tertiary);
+  --color-accent-primary: var(--accent-primary);
   --font-sans: var(--font-system);
 }
 
@@ -78,9 +105,15 @@
 html, body {
   height: 100%;
   font-family: var(--font-system);
-  background-color: var(--bg-primary);
+  background-color: var(--bg-canvas);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Tabular Nums for Hero Numbers & Amounts */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
 /* Custom scrollbar clean & minimal */
@@ -89,6 +122,76 @@ html, body {
   height: 6px;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--separator);
+  background: var(--border-strong);
   border-radius: 9999px;
+}
+
+/* Confirm Dialog Styles */
+.confirm-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  padding: 1rem;
+}
+
+.confirm-dialog {
+  width: 100%;
+  max-width: 28rem;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 1rem;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+}
+
+.confirm-dialog-body {
+  padding: 1.25rem 1.5rem;
+}
+
+.confirm-dialog-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+}
+
+.confirm-dialog-message {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 0.75rem 1.5rem 1.25rem;
+}
+
+.confirm-dialog-actions button {
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border-radius: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background-color: var(--bg-subtle);
+  color: var(--text-primary);
+  border: 1px solid transparent;
+}
+
+.confirm-dialog-actions button.destructive {
+  background-color: rgba(225, 29, 72, 0.15);
+  color: #FB7185;
+  border-color: rgba(225, 29, 72, 0.3);
+}
+
+.confirm-dialog-actions button.destructive:hover {
+  background-color: rgba(225, 29, 72, 0.25);
 }

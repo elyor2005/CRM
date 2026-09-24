@@ -12,18 +12,20 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
     return (
       <div className="flex flex-col gap-1.5 w-full">
         {label && (
-          <label className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-zinc-400 pl-1">
+          <label className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-zinc-400 pl-0.5">
             {label}
           </label>
         )}
         <input
           ref={ref}
-          className={`w-full px-4 py-2.5 bg-gray-100 dark:bg-zinc-800 text-gray-900 dark:text-white rounded-xl outline-none text-base transition-all focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 min-h-[44px] ${
-            error ? "border border-red-500/50" : "border border-transparent"
+          className={`w-full px-4 py-2.5 bg-gray-100 dark:bg-[#1E2638] text-gray-900 dark:text-white rounded-xl text-base transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500/80 focus:bg-white dark:focus:bg-[#1A202C] disabled:opacity-50 min-h-[44px] ${
+            error
+              ? "border border-rose-500/60 ring-1 ring-rose-500/20"
+              : "border border-gray-200/60 dark:border-zinc-800"
           } ${className}`}
           {...props}
         />
-        {error && <span className="text-xs text-red-500 pl-1 font-medium">{error}</span>}
+        {error && <span className="text-xs text-rose-500 pl-0.5 font-medium">{error}</span>}
       </div>
     );
   }

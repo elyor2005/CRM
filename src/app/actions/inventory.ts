@@ -10,6 +10,13 @@ import {
 } from "@/lib/validations";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
+import { logAction } from "./audit";
+
+function safeRevalidate(path: string) {
+  try {
+    revalidatePath(path);
+  } catch {}
+}
 
 export async function getInventoryByCategory() {
   const items = await prisma.inventoryItem.findMany({
@@ -58,10 +65,17 @@ export async function createInventoryItem(data: unknown) {
       unit: parsed.unit,
       costPrice: new Prisma.Decimal(parsed.costPrice),
       salePrice: parsed.salePrice ? new Prisma.Decimal(parsed.salePrice) : null,
+      minStock: parsed.minStock ? new Prisma.Decimal(parsed.minStock) : new Prisma.Decimal(0),
     },
   });
 
-  revalidatePath("/warehouse");
+  await logAction({
+    action: "CREATE",
+    entity: "InventoryItem",
+    description: `Создан товар: ${parsed.name} (${parsed.category})`,
+  });
+
+  safeRevalidate("/warehouse");
 }
 
 export async function updateInventoryItem(id: string, data: unknown) {
@@ -75,10 +89,18 @@ export async function updateInventoryItem(id: string, data: unknown) {
       unit: parsed.unit,
       costPrice: new Prisma.Decimal(parsed.costPrice),
       salePrice: parsed.salePrice ? new Prisma.Decimal(parsed.salePrice) : null,
+      minStock: parsed.minStock ? new Prisma.Decimal(parsed.minStock) : new Prisma.Decimal(0),
     },
   });
 
-  revalidatePath("/warehouse");
+  await logAction({
+    action: "UPDATE",
+    entity: "InventoryItem",
+    entityId: id,
+    description: `Обновлён товар: ${parsed.name}`,
+  });
+
+  safeRevalidate("/warehouse");
 }
 
 /**
@@ -146,8 +168,15 @@ export async function produceItem(data: unknown) {
     }
   });
 
-  revalidatePath("/warehouse");
-  revalidatePath("/report");
+  await logAction({
+    action: "PRODUCE",
+    entity: "InventoryItem",
+    entityId: parsed.itemId,
+    description: `Произведено ${qty} шт.`,
+  });
+
+  safeRevalidate("/warehouse");
+  safeRevalidate("/report");
 }
 
 /**
@@ -174,8 +203,15 @@ export async function restockItem(data: unknown) {
     });
   });
 
-  revalidatePath("/warehouse");
-  revalidatePath("/report");
+  await logAction({
+    action: "RESTOCK",
+    entity: "InventoryItem",
+    entityId: parsed.itemId,
+    description: `Приход ${qty} шт.`,
+  });
+
+  safeRevalidate("/warehouse");
+  safeRevalidate("/report");
 }
 
 /**
@@ -202,8 +238,15 @@ export async function writeOffItem(data: unknown) {
     });
   });
 
-  revalidatePath("/warehouse");
-  revalidatePath("/report");
+  await logAction({
+    action: "WRITE_OFF",
+    entity: "InventoryItem",
+    entityId: parsed.itemId,
+    description: `Списание ${qty} шт. (${parsed.reason})`,
+  });
+
+  safeRevalidate("/warehouse");
+  safeRevalidate("/report");
 }
 
 /**
@@ -230,7 +273,7 @@ export async function updateRecipe(data: unknown) {
     }
   });
 
-  revalidatePath("/warehouse");
+  safeRevalidate("/warehouse");
 }
 
 export async function getRecipe(productId: string) {
@@ -238,4 +281,18 @@ export async function getRecipe(productId: string) {
     where: { productId },
     include: { ingredient: true },
   });
+}
+
+/**
+ * Get items below their minimum stock level
+ */
+export async function getLowStockItems() {
+  const items = await prisma.inventoryItem.findMany({
+    where: {
+      minStock: { gt: 0 },
+    },
+    orderBy: { name: "asc" },
+  });
+
+  return items.filter((item) => Number(item.quantity) < Number(item.minStock));
 }

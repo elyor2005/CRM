@@ -5,17 +5,41 @@ import { LiabilityEntrySchema } from "@/lib/validations";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 
+function safeRevalidate(path: string) {
+  try {
+    revalidatePath(path);
+  } catch {}
+}
+
 /**
  * Get the full balance report data.
  * DEBIT: inventory value by category + cash balance + client debts
  * CREDIT: manual liability entries
  */
 export async function getBalanceReport() {
-  // ─── DEBIT side ───
+  // Single parallel batch for all 5 independent queries
+  const [items, income, expense, clients, liabilities] = await Promise.all([
+    prisma.inventoryItem.findMany(),
+    prisma.financeEntry.aggregate({
+      where: { type: "INCOME" },
+      _sum: { amount: true },
+    }),
+    prisma.financeEntry.aggregate({
+      where: { type: "EXPENSE" },
+      _sum: { amount: true },
+    }),
+    prisma.client.findMany({
+      include: {
+        sales: { include: { items: true } },
+        payments: true,
+      },
+    }),
+    prisma.liabilityEntry.findMany({
+      orderBy: { date: "desc" },
+    }),
+  ]);
 
   // Inventory value by category
-  const items = await prisma.inventoryItem.findMany();
-
   const inventoryByCategory: Record<string, number> = {
     FINISHED_GOOD: 0,
     RAW_MATERIAL: 0,
@@ -23,30 +47,16 @@ export async function getBalanceReport() {
   };
 
   for (const item of items) {
-    inventoryByCategory[item.category] +=
+    inventoryByCategory[item.category] =
+      (inventoryByCategory[item.category] || 0) +
       Number(item.quantity) * Number(item.costPrice);
   }
 
   // Cash balance
-  const income = await prisma.financeEntry.aggregate({
-    where: { type: "INCOME" },
-    _sum: { amount: true },
-  });
-  const expense = await prisma.financeEntry.aggregate({
-    where: { type: "EXPENSE" },
-    _sum: { amount: true },
-  });
   const cashBalance =
     Number(income._sum.amount || 0) - Number(expense._sum.amount || 0);
 
   // Total client debts (debts owed TO us = receivables)
-  const clients = await prisma.client.findMany({
-    include: {
-      sales: { include: { items: true } },
-      payments: true,
-    },
-  });
-
   let totalReceivables = 0;
   for (const client of clients) {
     let clientDebt = 0;
@@ -74,17 +84,11 @@ export async function getBalanceReport() {
     if (debt > 0) totalReceivables += debt;
   }
 
-  // ─── CREDIT side ───
-  const liabilities = await prisma.liabilityEntry.findMany({
-    orderBy: { date: "desc" },
-  });
-
   const totalLiabilities = liabilities.reduce(
     (sum, l) => sum + Number(l.amount),
     0
   );
 
-  // ─── Totals ───
   const debitTotal =
     inventoryByCategory.FINISHED_GOOD +
     inventoryByCategory.RAW_MATERIAL +
@@ -122,7 +126,7 @@ export async function createLiabilityEntry(data: unknown) {
     },
   });
 
-  revalidatePath("/report");
+  safeRevalidate("/report");
 }
 
 export async function updateLiabilityEntry(id: string, data: unknown) {
@@ -137,10 +141,10 @@ export async function updateLiabilityEntry(id: string, data: unknown) {
     },
   });
 
-  revalidatePath("/report");
+  safeRevalidate("/report");
 }
 
 export async function deleteLiabilityEntry(id: string) {
   await prisma.liabilityEntry.delete({ where: { id } });
-  revalidatePath("/report");
+  safeRevalidate("/report");
 }

@@ -11,48 +11,87 @@ import {
   getFinanceEntries,
   createFinanceEntry,
   deleteFinanceEntry,
-  getCashBalance,
+  getFinanceSummary,
 } from "@/app/actions/finance";
 import { useLanguage } from "@/lib/i18n/context";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { Badge } from "@/components/ui/Badge";
+import { Table, TableRow } from "@/components/ui/Table";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { TableRowSkeleton, CardSkeleton } from "@/components/ui/Skeleton";
+import { PAYMENT_METHODS, EXPENSE_CATEGORIES } from "@/lib/validations";
 import type { FinanceType } from "@prisma/client";
 
 type Entry = Awaited<ReturnType<typeof getFinanceEntries>>[number];
+
+type DatePreset = "ALL" | "TODAY" | "WEEK" | "MONTH" | "CUSTOM";
+
+function getDateRange(preset: DatePreset): { from?: string; to?: string } {
+  const now = new Date();
+  const today = formatDateInput(now);
+  switch (preset) {
+    case "TODAY":
+      return { from: today, to: today };
+    case "WEEK": {
+      const weekAgo = new Date(now);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      return { from: formatDateInput(weekAgo), to: today };
+    }
+    case "MONTH": {
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { from: formatDateInput(monthStart), to: today };
+    }
+    default:
+      return {};
+  }
+}
 
 export default function FinancePage() {
   const { language, t } = useLanguage();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [filter, setFilter] = useState<"ALL" | "INCOME" | "EXPENSE">("ALL");
-  const [cashBalance, setCashBalance] = useState(0);
+  const [datePreset, setDatePreset] = useState<DatePreset>("ALL");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [summary, setSummary] = useState({ totalIncome: 0, totalExpense: 0, balance: 0 });
   const [sheetOpen, setSheetOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [loading, setLoading] = useState(true);
   const { showToast } = useToast();
 
   // Form
-  const [formType, setFormType] = useState<FinanceType>("INCOME");
+  const [formType, setFormType] = useState<FinanceType>("EXPENSE");
   const [formDesc, setFormDesc] = useState("");
   const [formAmount, setFormAmount] = useState("");
   const [formDate, setFormDate] = useState(formatDateInput(new Date()));
+  const [formCategory, setFormCategory] = useState("");
+  const [formMethod, setFormMethod] = useState<string>("CASH");
 
   const loadData = () => {
     startTransition(async () => {
+      const range =
+        datePreset === "CUSTOM"
+          ? { from: customFrom || undefined, to: customTo || undefined }
+          : getDateRange(datePreset);
+
       const filterVal = filter === "ALL" ? undefined : filter;
-      const [e, b] = await Promise.all([
-        getFinanceEntries(filterVal),
-        getCashBalance(),
+      const [e, s] = await Promise.all([
+        getFinanceEntries({ filter: filterVal, dateFrom: range.from, dateTo: range.to }),
+        getFinanceSummary({ dateFrom: range.from, dateTo: range.to }),
       ]);
       setEntries(e);
-      setCashBalance(b);
+      setSummary(s);
+      setLoading(false);
     });
   };
 
   useEffect(() => {
     loadData();
-  }, [filter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filter, datePreset, customFrom, customTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSubmit = () => {
     if (!formDesc.trim() || !formAmount || Number(formAmount) <= 0) return;
@@ -63,11 +102,14 @@ export default function FinancePage() {
           description: formDesc.trim(),
           amount: formAmount,
           date: formDate,
+          category: formCategory || undefined,
+          paymentMethod: formMethod as any,
         });
         showToast(t("common.add"));
         setSheetOpen(false);
         setFormDesc("");
         setFormAmount("");
+        setFormCategory("");
         loadData();
       } catch (e) {
         showToast(e instanceof Error ? e.message : "Error", "error");
@@ -89,31 +131,21 @@ export default function FinancePage() {
     });
   };
 
+  // Running balance computation
   const entriesReversed = [...entries].reverse();
   const runningBalances: number[] = [];
   let runBal = 0;
   for (const entry of entriesReversed) {
-    if (entry.type === "INCOME") {
-      runBal += Number(entry.amount);
-    } else {
-      runBal -= Number(entry.amount);
-    }
+    if (entry.type === "INCOME") runBal += Number(entry.amount);
+    else runBal -= Number(entry.amount);
     runningBalances.push(runBal);
   }
   runningBalances.reverse();
 
   return (
-    <>
+    <div className="space-y-6">
       <PageHeader
         title={t("finance.title")}
-        subtitle={
-          <span>
-            {t("finance.balance")}:{" "}
-            <strong className={cashBalance >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>
-              {formatUZS(cashBalance)} {t("common.sum")}
-            </strong>
-          </span>
-        }
         action={
           <Button
             onClick={() => {
@@ -121,6 +153,8 @@ export default function FinancePage() {
               setFormDesc("");
               setFormAmount("");
               setFormDate(formatDateInput(new Date()));
+              setFormCategory("");
+              setFormMethod("CASH");
               setSheetOpen(true);
             }}
             size="md"
@@ -130,113 +164,175 @@ export default function FinancePage() {
         }
       />
 
-      {/* Segmented Filter */}
-      <div className="mb-6 max-w-xs">
-        <SegmentedControl
-          value={filter}
-          onChange={(v) => setFilter(v as typeof filter)}
-          options={[
-            { value: "ALL", label: t("common.all") },
-            { value: "INCOME", label: t("finance.income") },
-            { value: "EXPENSE", label: t("finance.expense") },
-          ]}
-        />
+      {/* Summary Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+        <Card className="p-4 text-center">
+          <div className="text-xs font-bold uppercase text-gray-500 dark:text-zinc-400 mb-1">{t("finance.totalIncome")}</div>
+          <div className="text-xl sm:text-2xl font-extrabold text-emerald-600 dark:text-emerald-400 tabular-nums">{formatUZS(summary.totalIncome)}</div>
+        </Card>
+        <Card className="p-4 text-center">
+          <div className="text-xs font-bold uppercase text-gray-500 dark:text-zinc-400 mb-1">{t("finance.totalExpense")}</div>
+          <div className="text-xl sm:text-2xl font-extrabold text-rose-600 dark:text-rose-400 tabular-nums">{formatUZS(summary.totalExpense)}</div>
+        </Card>
+        <Card className="p-4 text-center">
+          <div className="text-xs font-bold uppercase text-gray-500 dark:text-zinc-400 mb-1">{t("finance.balance")}</div>
+          <div className={`text-xl sm:text-2xl font-extrabold tabular-nums ${summary.balance >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+            {formatUZS(summary.balance)}
+          </div>
+        </Card>
       </div>
 
-      {/* Finance ledger cards */}
-      {entries.length === 0 ? (
-        <Card className="flex flex-col items-center justify-center p-12 text-center">
-          <div className="w-14 h-14 rounded-full bg-gray-100 dark:bg-zinc-800 flex items-center justify-center text-gray-400 mb-3">
-            <Wallet size={28} />
-          </div>
-          <h3 className="text-base font-semibold text-gray-900 dark:text-white">
-            {t("common.noData")}
-          </h3>
-          <p className="text-sm text-gray-500 dark:text-zinc-400 mt-1 mb-4">
-            {t("finance.newEntry")}
-          </p>
-        </Card>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {entries.map((entry, idx) => {
-            const isIncome = entry.type === "INCOME";
-            const isLinked = !!entry.relatedSaleId;
-
-            return (
-              <Card
-                key={entry.id}
-                hoverable={!isLinked}
-                onClick={() => {
-                  if (!isLinked) setDeleteId(entry.id);
-                }}
-                className="flex items-center justify-between p-4"
-              >
-                <div className="flex flex-col gap-1 pr-2">
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-sm text-gray-900 dark:text-white">
-                      {entry.description}
-                    </span>
-                    {isLinked && (
-                      <LinkIcon size={14} className="text-gray-400 shrink-0" />
-                    )}
-                  </div>
-                  <span className="text-xs text-gray-500 dark:text-zinc-400">
-                    {formatDateShort(entry.date, language)}
-                    {entry.relatedClient && ` · ${entry.relatedClient.name}`}
-                  </span>
-                </div>
-
-                <div className="text-right shrink-0">
-                  <div
-                    className={`font-extrabold text-base ${
-                      isIncome ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
-                    }`}
-                  >
-                    {isIncome ? "+" : "−"}
-                    {formatUZS(entry.amount)}
-                  </div>
-                  <div className="text-xs text-gray-400 font-medium">
-                    {formatUZS(runningBalances[idx] || 0)}
-                  </div>
-                </div>
-              </Card>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Floating Action Button (Mobile) */}
-      <button
-        onClick={() => {
-          setFormType("EXPENSE");
-          setFormDesc("");
-          setFormAmount("");
-          setFormDate(formatDateInput(new Date()));
-          setSheetOpen(true);
-        }}
-        className="md:hidden fixed bottom-20 right-4 z-40 w-14 h-14 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-lg active:scale-95 transition-transform"
-      >
-        <Plus size={26} />
-      </button>
-
-      {/* Add Entry Modal Sheet */}
-      <ModalSheet open={sheetOpen} onClose={() => setSheetOpen(false)} title={t("finance.newEntry")}>
-        <div className="flex flex-col gap-4">
+      {/* Filter Toolbar */}
+      <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center">
+        <div className="w-full md:w-auto">
           <SegmentedControl
-            value={formType}
-            onChange={setFormType}
+            value={filter}
+            onChange={(v) => setFilter(v as typeof filter)}
             options={[
+              { value: "ALL", label: t("common.all") },
               { value: "INCOME", label: t("finance.income") },
               { value: "EXPENSE", label: t("finance.expense") },
             ]}
           />
+        </div>
+        <div className="w-full md:w-auto">
+          <SegmentedControl
+            value={datePreset}
+            onChange={(v) => setDatePreset(v as DatePreset)}
+            options={[
+              { value: "ALL", label: t("common.all") },
+              { value: "TODAY", label: t("common.today") },
+              { value: "WEEK", label: t("common.thisWeek") },
+              { value: "MONTH", label: t("common.thisMonth") },
+              { value: "CUSTOM", label: t("common.custom") },
+            ]}
+          />
+        </div>
+      </div>
+
+      {datePreset === "CUSTOM" && (
+        <div className="grid grid-cols-2 gap-3 max-w-md">
           <Input
-            label={t("finance.description")}
-            placeholder="..."
+            label={t("common.from")}
+            type="date"
+            value={customFrom}
+            onChange={(e) => setCustomFrom(e.target.value)}
+          />
+          <Input
+            label={t("common.to")}
+            type="date"
+            value={customTo}
+            onChange={(e) => setCustomTo(e.target.value)}
+          />
+        </div>
+      )}
+
+      {/* Finance Records Table */}
+      {loading ? (
+        <div className="bg-white dark:bg-[#131823] rounded-2xl border border-gray-200/80 dark:border-zinc-800 divide-y divide-gray-100 dark:divide-zinc-800">
+          <TableRowSkeleton />
+          <TableRowSkeleton />
+          <TableRowSkeleton />
+        </div>
+      ) : entries.length === 0 ? (
+        <EmptyState
+          icon={<Wallet size={28} />}
+          title={t("common.noData")}
+          actionLabel={t("finance.newEntry")}
+          onAction={() => setSheetOpen(true)}
+        />
+      ) : (
+        <Table
+          headers={[
+            t("common.date"),
+            t("common.type"),
+            t("common.description"),
+            t("common.category"),
+            t("common.method"),
+            t("common.amount"),
+            t("finance.runningBalance"),
+            "",
+          ]}
+          alignments={["left", "left", "left", "left", "left", "right", "right", "center"]}
+        >
+          {entries.map((entry, idx) => {
+            const isIncome = entry.type === "INCOME";
+            const isLinked = !!entry.relatedSaleId;
+            return (
+              <TableRow
+                key={entry.id}
+                onClick={!isLinked ? () => setDeleteId(entry.id) : undefined}
+              >
+                <td className="p-3.5 whitespace-nowrap text-gray-700 dark:text-zinc-300 font-medium">
+                  {formatDateShort(entry.date, language)}
+                </td>
+                <td className="p-3.5 whitespace-nowrap">
+                  <Badge variant={isIncome ? "income" : "expense"}>
+                    {isIncome ? t("finance.income") : t("finance.expense")}
+                  </Badge>
+                </td>
+                <td className="p-3.5 text-gray-900 dark:text-white font-semibold">
+                  <div className="flex items-center gap-1.5">
+                    {entry.description}
+                    {isLinked && <LinkIcon size={12} className="text-gray-400 shrink-0" />}
+                  </div>
+                  {entry.relatedClient && (
+                    <div className="text-xs text-gray-500 dark:text-zinc-400 font-normal">{entry.relatedClient.name}</div>
+                  )}
+                </td>
+                <td className="p-3.5 whitespace-nowrap text-gray-500 dark:text-zinc-400 text-xs font-semibold">
+                  {entry.category ? t(`expenseCategories.${entry.category}`, entry.category) : "—"}
+                </td>
+                <td className="p-3.5 whitespace-nowrap text-gray-500 dark:text-zinc-400 text-xs font-semibold">
+                  {entry.paymentMethod ? t(`paymentMethods.${entry.paymentMethod}`) : "—"}
+                </td>
+                <td className={`p-3.5 text-right whitespace-nowrap font-extrabold tabular-nums ${isIncome ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+                  {isIncome ? "+" : "−"}{formatUZS(entry.amount)}
+                </td>
+                <td className="p-3.5 text-right whitespace-nowrap text-gray-500 dark:text-zinc-400 font-medium text-xs tabular-nums">
+                  {formatUZS(runningBalances[idx] || 0)}
+                </td>
+                <td className="p-3.5 text-center">
+                  {!isLinked && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setDeleteId(entry.id); }}
+                      className="text-gray-400 hover:text-rose-500 transition-colors p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                </td>
+              </TableRow>
+            );
+          })}
+        </Table>
+      )}
+
+      {/* New Entry Modal */}
+      <ModalSheet
+        open={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        title={t("finance.newEntry")}
+      >
+        <div className="flex flex-col gap-4">
+          <SegmentedControl
+            value={formType}
+            onChange={(v) => setFormType(v as FinanceType)}
+            options={[
+              { value: "EXPENSE", label: t("finance.expense") },
+              { value: "INCOME", label: t("finance.income") },
+            ]}
+          />
+
+          <Input
+            label={t("common.description")}
+            placeholder={formType === "EXPENSE" ? "Аренда офиса" : "Оплата"}
             value={formDesc}
             onChange={(e) => setFormDesc(e.target.value)}
             autoFocus
           />
+
           <Input
             label={t("common.amount")}
             type="number"
@@ -246,12 +342,51 @@ export default function FinancePage() {
             value={formAmount}
             onChange={(e) => setFormAmount(e.target.value)}
           />
+
           <Input
             label={t("common.date")}
             type="date"
             value={formDate}
             onChange={(e) => setFormDate(e.target.value)}
           />
+
+          {formType === "EXPENSE" && (
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-zinc-400 pl-0.5">
+                {t("common.category")}
+              </label>
+              <select
+                className="w-full px-4 py-2.5 bg-gray-100 dark:bg-[#1E2638] text-gray-900 dark:text-white rounded-xl text-base border border-gray-200/60 dark:border-zinc-800 outline-none transition-all focus:ring-2 focus:ring-indigo-500/80 min-h-[44px]"
+                value={formCategory}
+                onChange={(e) => setFormCategory(e.target.value)}
+              >
+                <option value="">-- {t("common.select")} --</option>
+                {EXPENSE_CATEGORIES.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {t(`expenseCategories.${cat}`)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-zinc-400 pl-0.5">
+              {t("common.method")}
+            </label>
+            <select
+              className="w-full px-4 py-2.5 bg-gray-100 dark:bg-[#1E2638] text-gray-900 dark:text-white rounded-xl text-base border border-gray-200/60 dark:border-zinc-800 outline-none transition-all focus:ring-2 focus:ring-indigo-500/80 min-h-[44px]"
+              value={formMethod}
+              onChange={(e) => setFormMethod(e.target.value)}
+            >
+              {PAYMENT_METHODS.map((m) => (
+                <option key={m} value={m}>
+                  {t(`paymentMethods.${m}`)}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <Button
             type="button"
             variant="primary"
@@ -260,21 +395,20 @@ export default function FinancePage() {
             disabled={!formDesc.trim() || !formAmount || Number(formAmount) <= 0}
             loading={isPending}
           >
-            {t("common.add")}
+            {t("common.save")}
           </Button>
         </div>
       </ModalSheet>
 
-      {/* Delete confirmation */}
+      {/* Delete confirm */}
       <ConfirmDialog
         open={!!deleteId}
         title={t("common.delete")}
         message={t("common.confirmDelete")}
-        confirmLabel={t("common.delete")}
         destructive
         onConfirm={handleDelete}
         onCancel={() => setDeleteId(null)}
       />
-    </>
+    </div>
   );
 }

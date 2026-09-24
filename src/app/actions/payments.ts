@@ -4,18 +4,20 @@ import { prisma } from "@/lib/db";
 import { PaymentFormSchema } from "@/lib/validations";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
+import { logAction } from "./audit";
 
 export async function createPayment(data: unknown) {
   const parsed = PaymentFormSchema.parse(data);
 
-  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+  const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     // Create the payment
-    await tx.payment.create({
+    const payment = await tx.payment.create({
       data: {
         clientId: parsed.clientId,
         amount: new Prisma.Decimal(parsed.amount),
         date: new Date(parsed.date),
         note: parsed.note || null,
+        method: parsed.method || "CASH",
       },
     });
 
@@ -31,11 +33,24 @@ export async function createPayment(data: unknown) {
         description: `Оплата долга от ${client?.name || "клиента"}${parsed.note ? ` — ${parsed.note}` : ""}`,
         amount: new Prisma.Decimal(parsed.amount),
         relatedClientId: parsed.clientId,
+        paymentMethod: parsed.method || "CASH",
+        category: "DEBT_PAYMENT",
       },
     });
+
+    return { payment, clientName: client?.name };
   });
 
-  revalidatePath("/debts");
-  revalidatePath("/finance");
-  revalidatePath("/report");
+  await logAction({
+    action: "CREATE",
+    entity: "Payment",
+    entityId: result.payment.id,
+    description: `Принята оплата ${parsed.amount} от ${result.clientName || "клиента"} (${parsed.method || "CASH"})`,
+  });
+
+  try {
+    revalidatePath("/debts");
+    revalidatePath("/finance");
+    revalidatePath("/report");
+  } catch {}
 }

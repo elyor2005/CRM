@@ -2,20 +2,26 @@
 
 import { useState, useEffect, useTransition } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Plus, ShoppingCart, CreditCard } from "lucide-react";
+import { ArrowLeft, Plus } from "lucide-react";
 import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { useToast } from "@/components/ui/Toast";
-import { getClient, getClientHistory, getClientDebt } from "@/app/actions/clients";
+import { getClient, getClientHistory, getClientDetailedStats } from "@/app/actions/clients";
 import { createPayment } from "@/app/actions/payments";
 import { useLanguage } from "@/lib/i18n/context";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { Badge } from "@/components/ui/Badge";
+import { Table, TableRow } from "@/components/ui/Table";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { TableRowSkeleton, CardSkeleton } from "@/components/ui/Skeleton";
+import { PAYMENT_METHODS } from "@/lib/validations";
 
 type ClientType = NonNullable<Awaited<ReturnType<typeof getClient>>>;
 type HistoryType = Awaited<ReturnType<typeof getClientHistory>>;
+type StatsType = Awaited<ReturnType<typeof getClientDetailedStats>>;
 
 export default function ClientDetailPage() {
   const { language, t } = useLanguage();
@@ -24,24 +30,25 @@ export default function ClientDetailPage() {
   const clientId = params.clientId as string;
   const [client, setClient] = useState<ClientType | null>(null);
   const [history, setHistory] = useState<HistoryType | null>(null);
-  const [debt, setDebt] = useState(0);
+  const [stats, setStats] = useState<StatsType | null>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentDate, setPaymentDate] = useState(formatDateInput(new Date()));
   const [paymentNote, setPaymentNote] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("CASH");
   const [isPending, startTransition] = useTransition();
   const { showToast } = useToast();
 
   const loadData = () => {
     startTransition(async () => {
-      const [c, h, d] = await Promise.all([
+      const [c, h, s] = await Promise.all([
         getClient(clientId),
         getClientHistory(clientId),
-        getClientDebt(clientId),
+        getClientDetailedStats(clientId),
       ]);
       setClient(c);
       setHistory(h);
-      setDebt(d);
+      setStats(s);
     });
   };
 
@@ -58,11 +65,13 @@ export default function ClientDetailPage() {
           amount: paymentAmount,
           date: paymentDate,
           note: paymentNote,
+          method: paymentMethod as any,
         });
         showToast(t("debts.addPayment"));
         setPaymentOpen(false);
         setPaymentAmount("");
         setPaymentNote("");
+        setPaymentMethod("CASH");
         loadData();
       } catch (e) {
         showToast(e instanceof Error ? e.message : "Error", "error");
@@ -70,9 +79,16 @@ export default function ClientDetailPage() {
     });
   };
 
-  if (!client || !history) {
+  if (!client || !history || !stats) {
     return (
-      <div className="py-12 text-center text-gray-500 font-medium">{t("common.loading")}</div>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <CardSkeleton />
+          <CardSkeleton />
+          <CardSkeleton />
+          <CardSkeleton />
+        </div>
+      </div>
     );
   }
 
@@ -86,10 +102,10 @@ export default function ClientDetailPage() {
   ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   return (
-    <>
+    <div className="space-y-6">
       <button
         onClick={() => router.back()}
-        className="inline-flex items-center gap-1 text-sm font-semibold text-blue-600 dark:text-blue-400 hover:underline mb-3"
+        className="inline-flex items-center gap-1 text-sm font-bold text-indigo-600 dark:text-indigo-400 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded-lg"
       >
         <ArrowLeft size={18} /> {t("common.cancel")}
       </button>
@@ -104,117 +120,128 @@ export default function ClientDetailPage() {
         }
       />
 
-      {/* Debt summary card */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <Card className="flex flex-col items-center justify-center p-6 text-center md:col-span-3 bg-gradient-to-br from-blue-50/50 to-indigo-50/50 dark:from-zinc-900 dark:to-zinc-900 border-blue-100 dark:border-zinc-800">
-          <span className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-zinc-400">
-            {t("debts.clientProfile")}
-          </span>
-          <span
-            className={`text-3xl sm:text-4xl font-extrabold tracking-tight my-1 ${
-              debt > 0
-                ? "text-red-600 dark:text-red-400"
-                : debt < 0
-                ? "text-blue-600 dark:text-blue-400"
-                : "text-emerald-600 dark:text-emerald-400"
-            }`}
-          >
-            {formatUZS(debt)}{" "}
-            <span className="text-sm font-normal text-gray-500">{t("common.sum")}</span>
-          </span>
-          <span className="text-xs font-semibold text-gray-500">
-            {debt > 0 ? t("debts.debtor") : debt < 0 ? t("debts.overpaid") : t("debts.settled")}
-          </span>
+      {/* Overview Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+        <Card className="p-4 text-center">
+          <div className="text-xs font-bold uppercase text-gray-500 dark:text-zinc-400 mb-1">{t("debts.totalSales")}</div>
+          <div className="text-lg sm:text-xl font-extrabold text-gray-900 dark:text-white tabular-nums">{formatUZS(stats.totalSalesValue)}</div>
+        </Card>
+        <Card className="p-4 text-center">
+          <div className="text-xs font-bold uppercase text-gray-500 dark:text-zinc-400 mb-1">{t("debts.totalPaid")}</div>
+          <div className="text-lg sm:text-xl font-extrabold text-emerald-600 dark:text-emerald-400 tabular-nums">{formatUZS(stats.totalPaid)}</div>
+        </Card>
+        <Card className="p-4 text-center col-span-2">
+          <div className="text-xs font-bold uppercase text-gray-500 dark:text-zinc-400 mb-1">{t("debts.currentDebt")}</div>
+          <div className={`text-2xl sm:text-3xl font-extrabold tracking-tight tabular-nums ${stats.currentDebt > 0 ? "text-orange-600 dark:text-orange-400" : stats.currentDebt < 0 ? "text-indigo-600 dark:text-indigo-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+            {formatUZS(stats.currentDebt)} <span className="text-xs font-bold text-gray-500">{t("common.sum")}</span>
+          </div>
         </Card>
       </div>
 
-      {/* History section */}
-      <div className="flex flex-col gap-3">
-        <h3 className="text-sm font-bold uppercase tracking-wider text-gray-500 dark:text-zinc-400 px-1">
+      {/* Debt Aging Buckets */}
+      {stats.currentDebt > 0 && (
+        <section className="space-y-3">
+          <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400 px-1">
+            {t("debts.debtAging")}
+          </h3>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { label: t("debts.days0to7"), value: stats.debtAging.days0to7, color: "text-amber-600 dark:text-amber-400" },
+              { label: t("debts.days8to30"), value: stats.debtAging.days8to30, color: "text-orange-600 dark:text-orange-400" },
+              { label: t("debts.days31to60"), value: stats.debtAging.days31to60, color: "text-rose-500 dark:text-rose-400" },
+              { label: t("debts.days60plus"), value: stats.debtAging.days60plus, color: "text-rose-700 dark:text-rose-500" },
+            ].map((bucket) => (
+              <Card key={bucket.label} className="p-3 text-center">
+                <div className="text-[10px] font-bold text-gray-500 dark:text-zinc-400 uppercase">{bucket.label}</div>
+                <div className={`text-sm font-extrabold tabular-nums ${bucket.value > 0 ? bucket.color : "text-gray-300 dark:text-zinc-600"}`}>
+                  {formatUZS(bucket.value)}
+                </div>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Quick Counts */}
+      <div className="grid grid-cols-3 gap-3">
+        <Card className="p-3 text-center">
+          <div className="text-[10px] font-bold text-gray-500 dark:text-zinc-400 uppercase">{t("debts.salesCount")}</div>
+          <div className="text-base font-extrabold text-gray-900 dark:text-white tabular-nums">{stats.salesCount}</div>
+        </Card>
+        <Card className="p-3 text-center">
+          <div className="text-[10px] font-bold text-gray-500 dark:text-zinc-400 uppercase">{t("debts.returnsCount")}</div>
+          <div className="text-base font-extrabold text-gray-900 dark:text-white tabular-nums">{stats.returnsCount}</div>
+        </Card>
+        <Card className="p-3 text-center">
+          <div className="text-[10px] font-bold text-gray-500 dark:text-zinc-400 uppercase">{t("debts.paymentsCount")}</div>
+          <div className="text-base font-extrabold text-gray-900 dark:text-white tabular-nums">{stats.paymentsCount}</div>
+        </Card>
+      </div>
+
+      {/* Transaction History Table */}
+      <section className="space-y-3">
+        <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400 px-1">
           {t("debts.transactionHistory")}
         </h3>
 
         {entries.length === 0 ? (
-          <Card className="p-8 text-center text-gray-500">{t("common.noData")}</Card>
+          <EmptyState title={t("common.noData")} />
         ) : (
-          <div className="flex flex-col gap-2">
-            {entries.map((entry, idx) => (
-              <Card key={idx} className="p-4">
-                {entry.type === "sale" ? (() => {
-                  const sale = entry.data as HistoryType["sales"][number];
-                  const total = sale.items.reduce((s, i) => s + Number(i.lineTotal), 0);
-                  return (
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                            sale.type === "SALE"
-                              ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40"
-                              : "bg-amber-50 text-amber-600 dark:bg-amber-950/40"
-                          }`}
-                        >
-                          <ShoppingCart size={18} />
-                        </div>
-                        <div>
-                          <div className="font-bold text-sm text-gray-900 dark:text-white">
-                            {sale.type === "SALE" ? t("sales.saleType") : t("sales.returnType")}
-                          </div>
-                          <div className="text-xs text-gray-500 dark:text-zinc-400">
-                            {formatDateShort(sale.date, language)} · {sale.items.length}{" "}
-                            {t("sales.lineItems")}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="text-right">
-                        <div
-                          className={`font-extrabold text-base ${
-                            sale.type === "SALE" ? "text-red-600" : "text-emerald-600"
-                          }`}
-                        >
-                          {sale.type === "SALE" ? "+" : "−"}
-                          {formatUZS(total)}{" "}
-                          <span className="text-xs font-normal text-gray-500">{t("common.sum")}</span>
-                        </div>
-                        {Number(sale.payment) > 0 && (
-                          <div className="text-xs text-emerald-600 font-medium">
-                            {t("sales.paidAmount")}: {formatUZS(sale.payment)}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })() : (() => {
-                  const payment = entry.data as HistoryType["payments"][number];
-                  return (
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950/40 flex items-center justify-center shrink-0">
-                          <CreditCard size={18} />
-                        </div>
-                        <div>
-                          <div className="font-bold text-sm text-gray-900 dark:text-white">
-                            {t("debts.payment")}
-                          </div>
-                          <div className="text-xs text-gray-500 dark:text-zinc-400">
-                            {formatDateShort(payment.date, language)}
-                            {payment.note && ` · ${payment.note}`}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="text-right font-extrabold text-base text-emerald-600">
-                        −{formatUZS(payment.amount)}{" "}
-                        <span className="text-xs font-normal text-gray-500">{t("common.sum")}</span>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </Card>
-            ))}
-          </div>
+          <Table
+            headers={[t("common.date"), t("common.type"), t("common.description"), t("common.amount")]}
+            alignments={["left", "left", "left", "right"]}
+          >
+            {entries.map((entry, idx) => {
+              if (entry.type === "sale") {
+                const sale = entry.data as HistoryType["sales"][number];
+                const total = sale.items.reduce((s, i) => s + Number(i.lineTotal), 0);
+                return (
+                  <TableRow key={`sale-${idx}`}>
+                    <td className="p-3.5 whitespace-nowrap text-gray-700 dark:text-zinc-300 font-medium">
+                      {formatDateShort(sale.date, language)}
+                    </td>
+                    <td className="p-3.5 whitespace-nowrap">
+                      <Badge variant={sale.type === "SALE" ? "sale" : "return"}>
+                        {sale.type === "SALE" ? t("sales.saleType") : t("sales.returnType")}
+                      </Badge>
+                    </td>
+                    <td className="p-3.5 text-gray-900 dark:text-white font-medium">
+                      {sale.items.length} {t("sales.lineItems")}
+                      {Number(sale.payment) > 0 && (
+                        <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 ml-2 tabular-nums">
+                          {t("sales.paidAmount")}: {formatUZS(sale.payment)}
+                        </span>
+                      )}
+                    </td>
+                    <td className={`p-3.5 text-right whitespace-nowrap font-extrabold tabular-nums ${sale.type === "SALE" ? "text-orange-600 dark:text-orange-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+                      {sale.type === "SALE" ? "+" : "−"}{formatUZS(total)}
+                    </td>
+                  </TableRow>
+                );
+              } else {
+                const payment = entry.data as HistoryType["payments"][number];
+                return (
+                  <TableRow key={`pay-${idx}`}>
+                    <td className="p-3.5 whitespace-nowrap text-gray-700 dark:text-zinc-300 font-medium">
+                      {formatDateShort(payment.date, language)}
+                    </td>
+                    <td className="p-3.5 whitespace-nowrap">
+                      <Badge variant="settled">{t("debts.payment")}</Badge>
+                    </td>
+                    <td className="p-3.5 text-gray-900 dark:text-white font-medium">
+                      {t(`paymentMethods.${payment.method}`)}
+                      {payment.note && <span className="text-xs text-gray-500 dark:text-zinc-400 ml-2">{payment.note}</span>}
+                    </td>
+                    <td className="p-3.5 text-right whitespace-nowrap font-extrabold text-emerald-600 dark:text-emerald-400 tabular-nums">
+                      −{formatUZS(payment.amount)}
+                    </td>
+                  </TableRow>
+                );
+              }
+            })}
+          </Table>
         )}
-      </div>
+      </section>
 
       {/* Payment Form Modal */}
       <ModalSheet open={paymentOpen} onClose={() => setPaymentOpen(false)} title={t("debts.newPayment")}>
@@ -235,6 +262,22 @@ export default function ClientDetailPage() {
             value={paymentDate}
             onChange={(e) => setPaymentDate(e.target.value)}
           />
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-zinc-400 pl-0.5">
+              {t("common.method")}
+            </label>
+            <select
+              className="w-full px-4 py-2.5 bg-gray-100 dark:bg-[#1E2638] text-gray-900 dark:text-white rounded-xl text-base border border-gray-200/60 dark:border-zinc-800 outline-none transition-all focus:ring-2 focus:ring-indigo-500/80 min-h-[44px]"
+              value={paymentMethod}
+              onChange={(e) => setPaymentMethod(e.target.value)}
+            >
+              {PAYMENT_METHODS.map((m) => (
+                <option key={m} value={m}>
+                  {t(`paymentMethods.${m}`)}
+                </option>
+              ))}
+            </select>
+          </div>
           <Input
             label={t("common.notes")}
             placeholder="..."
@@ -253,6 +296,6 @@ export default function ClientDetailPage() {
           </Button>
         </div>
       </ModalSheet>
-    </>
+    </div>
   );
 }

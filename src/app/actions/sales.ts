@@ -4,6 +4,13 @@ import { prisma } from "@/lib/db";
 import { SaleFormSchema } from "@/lib/validations";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
+import { logAction } from "./audit";
+
+function safeRevalidate(path: string) {
+  try {
+    revalidatePath(path);
+  } catch {}
+}
 
 export async function getSales() {
   return prisma.sale.findMany({
@@ -58,6 +65,17 @@ export async function createSale(data: unknown) {
 
     // Create sale items and stock movements
     for (const item of parsed.items) {
+      const product = await tx.inventoryItem.findUnique({
+        where: { id: item.productId },
+      });
+      if (!product) throw new Error("Товар не найден");
+
+      if (isSale && Number(product.quantity) < Number(item.quantity)) {
+        throw new Error(
+          `Недостаточно товара "${product.name}": на складе ${product.quantity} ${product.unit}, запрошено ${item.quantity}`
+        );
+      }
+
       const unitPrice = item.isFreebie ? "0" : item.unitPrice;
       const lineTotal = item.isFreebie
         ? "0"
@@ -117,6 +135,7 @@ export async function createSale(data: unknown) {
           amount: new Prisma.Decimal(parsed.payment),
           relatedClientId: parsed.clientId,
           relatedSaleId: sale.id,
+          paymentMethod: "CASH",
         },
       });
     }
@@ -124,11 +143,18 @@ export async function createSale(data: unknown) {
     return sale;
   });
 
-  revalidatePath("/sales");
-  revalidatePath("/debts");
-  revalidatePath("/finance");
-  revalidatePath("/warehouse");
-  revalidatePath("/report");
+  await logAction({
+    action: "CREATE",
+    entity: "Sale",
+    entityId: result.id,
+    description: `${parsed.type === "SALE" ? "Продажа" : "Возврат"} на ${parsed.items.length} поз., оплата: ${parsed.payment}`,
+  });
+
+  safeRevalidate("/sales");
+  safeRevalidate("/debts");
+  safeRevalidate("/finance");
+  safeRevalidate("/warehouse");
+  safeRevalidate("/report");
   return result;
 }
 
@@ -139,6 +165,7 @@ export async function createSale(data: unknown) {
  * - Restore inventory quantities
  */
 export async function deleteSale(id: string) {
+  let saleType = "SALE";
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const sale = await tx.sale.findUnique({
       where: { id },
@@ -146,6 +173,7 @@ export async function deleteSale(id: string) {
     });
 
     if (!sale) throw new Error("Продажа не найдена");
+    saleType = sale.type;
 
     const isSale = sale.type === "SALE";
 
@@ -187,11 +215,18 @@ export async function deleteSale(id: string) {
     });
   });
 
-  revalidatePath("/sales");
-  revalidatePath("/debts");
-  revalidatePath("/finance");
-  revalidatePath("/warehouse");
-  revalidatePath("/report");
+  await logAction({
+    action: "DELETE",
+    entity: "Sale",
+    entityId: id,
+    description: `Удалена ${saleType === "SALE" ? "продажа" : "возврат"} #${id.slice(-6)}`,
+  });
+
+  safeRevalidate("/sales");
+  safeRevalidate("/debts");
+  safeRevalidate("/finance");
+  safeRevalidate("/warehouse");
+  safeRevalidate("/report");
 }
 
 /**
@@ -306,14 +341,22 @@ export async function updateSale(id: string, data: unknown) {
           amount: new Prisma.Decimal(parsed.payment),
           relatedClientId: parsed.clientId,
           relatedSaleId: id,
+          paymentMethod: "CASH",
         },
       });
     }
   });
 
-  revalidatePath("/sales");
-  revalidatePath("/debts");
-  revalidatePath("/finance");
-  revalidatePath("/warehouse");
-  revalidatePath("/report");
+  await logAction({
+    action: "UPDATE",
+    entity: "Sale",
+    entityId: id,
+    description: `Изменена ${parsed.type === "SALE" ? "продажа" : "возврат"} #${id.slice(-6)}`,
+  });
+
+  safeRevalidate("/sales");
+  safeRevalidate("/debts");
+  safeRevalidate("/finance");
+  safeRevalidate("/warehouse");
+  safeRevalidate("/report");
 }

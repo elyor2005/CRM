@@ -18,6 +18,24 @@ const nonNegativeDecimal = decimalString.refine(
   "Значение не может быть отрицательным"
 );
 
+// ─── Shared Enums ────────────────────────────────────────────────────────────
+
+export const PAYMENT_METHODS = ["CASH", "BANK_TRANSFER", "CARD", "OTHER"] as const;
+export type PaymentMethodType = (typeof PAYMENT_METHODS)[number];
+
+export const EXPENSE_CATEGORIES = [
+  "RAW_MATERIALS",
+  "PACKAGING",
+  "SALARY",
+  "TRANSPORTATION",
+  "RENT",
+  "UTILITIES",
+  "MARKETING",
+  "EQUIPMENT",
+  "OTHER",
+] as const;
+export type ExpenseCategoryType = (typeof EXPENSE_CATEGORIES)[number];
+
 // ─── Client ──────────────────────────────────────────────────────────────────
 
 export const ClientSchema = z.object({
@@ -55,6 +73,7 @@ export const PaymentFormSchema = z.object({
   amount: positiveDecimal,
   date: z.string().min(1, "Укажите дату"),
   note: z.string().max(500).optional().or(z.literal("")),
+  method: z.enum(PAYMENT_METHODS).default("CASH"),
 });
 
 export type PaymentFormInput = z.infer<typeof PaymentFormSchema>;
@@ -66,6 +85,8 @@ export const FinanceEntryFormSchema = z.object({
   description: z.string().min(1, "Введите описание").max(500),
   amount: positiveDecimal,
   date: z.string().min(1, "Укажите дату"),
+  category: z.string().max(50).optional().or(z.literal("")),
+  paymentMethod: z.enum(PAYMENT_METHODS).optional(),
 });
 
 export type FinanceEntryFormInput = z.infer<typeof FinanceEntryFormSchema>;
@@ -115,6 +136,7 @@ export const InventoryItemSchema = z.object({
   unit: z.string().min(1, "Введите единицу измерения").max(20),
   costPrice: nonNegativeDecimal,
   salePrice: nonNegativeDecimal.optional().or(z.literal("")),
+  minStock: nonNegativeDecimal.optional().or(z.literal("")),
 });
 
 export type InventoryItemInput = z.infer<typeof InventoryItemSchema>;

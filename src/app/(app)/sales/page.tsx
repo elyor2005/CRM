@@ -13,6 +13,8 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { CardSkeleton } from "@/components/ui/Skeleton";
 import { getSales, getProducts, createSale, deleteSale } from "@/app/actions/sales";
 import { getClients, createClient } from "@/app/actions/clients";
 import { useLanguage } from "@/lib/i18n/context";
@@ -50,6 +52,7 @@ export default function SalesPage() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [loading, setLoading] = useState(true);
   const { showToast } = useToast();
 
   // Form state
@@ -70,6 +73,7 @@ export default function SalesPage() {
       setSales(s);
       setProducts(p);
       setClients(c);
+      setLoading(false);
     });
   };
 
@@ -191,7 +195,7 @@ export default function SalesPage() {
   };
 
   return (
-    <>
+    <div className="space-y-6">
       <PageHeader
         title={t("sales.title")}
         action={
@@ -201,22 +205,20 @@ export default function SalesPage() {
         }
       />
 
-      {/* Sales grid */}
-      {sales.length === 0 ? (
-        <Card className="flex flex-col items-center justify-center p-12 text-center">
-          <div className="w-14 h-14 rounded-full bg-gray-100 dark:bg-zinc-800 flex items-center justify-center text-gray-400 mb-3">
-            <ShoppingCart size={28} />
-          </div>
-          <h3 className="text-base font-semibold text-gray-900 dark:text-white">
-            {t("common.noData")}
-          </h3>
-          <p className="text-sm text-gray-500 dark:text-zinc-400 mt-1 mb-4">
-            {t("sales.newSale")}
-          </p>
-          <Button onClick={openNewSale} size="sm">
-            <Plus size={16} /> {t("sales.newSale")}
-          </Button>
-        </Card>
+      {loading ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <CardSkeleton />
+          <CardSkeleton />
+          <CardSkeleton />
+        </div>
+      ) : sales.length === 0 ? (
+        <EmptyState
+          icon={<ShoppingCart size={28} />}
+          title={t("common.noData")}
+          description={t("sales.newSale")}
+          actionLabel={t("sales.newSale")}
+          onAction={openNewSale}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {sales.map((sale) => {
@@ -226,35 +228,34 @@ export default function SalesPage() {
                 key={sale.id}
                 hoverable
                 onClick={() => setDeleteConfirm(sale.id)}
-                className="flex flex-col justify-between gap-3"
+                className="flex flex-col justify-between gap-3 p-5"
               >
                 <div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-bold text-base text-gray-900 dark:text-white truncate">
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className="font-extrabold text-base text-gray-900 dark:text-white truncate">
                       {sale.client.name}
                     </span>
                     <Badge variant={sale.type === "SALE" ? "sale" : "return"}>
                       {sale.type === "SALE" ? t("sales.saleType") : t("sales.returnType")}
                     </Badge>
                   </div>
-                  <div className="text-xs text-gray-500 dark:text-zinc-400 mt-1">
+                  <div className="text-xs font-medium text-gray-500 dark:text-zinc-400">
                     {formatDateShort(sale.date, language)}
                     {sale.items.length > 0 && ` · ${sale.items.length} ${t("sales.lineItems")}`}
                   </div>
                 </div>
 
-                <div className="pt-2 border-t border-gray-100 dark:border-zinc-800 flex items-baseline justify-between">
+                <div className="pt-3 border-t border-gray-100 dark:border-zinc-800/80 flex items-baseline justify-between">
                   <div>
                     {Number(sale.payment) > 0 && (
-                      <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                      <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
                         {t("sales.paidAmount")}: {formatUZS(sale.payment)}
                       </span>
                     )}
                   </div>
                   <div className="text-right">
-                    <span className="text-lg font-extrabold text-gray-900 dark:text-white tracking-tight">
-                      {formatUZS(total)}{" "}
-                      <span className="text-xs font-normal text-gray-500">{t("common.sum")}</span>
+                    <span className="text-lg font-extrabold text-gray-900 dark:text-white tracking-tight tabular-nums">
+                      {formatUZS(total)}
                     </span>
                   </div>
                 </div>
@@ -267,7 +268,7 @@ export default function SalesPage() {
       {/* Floating Action Button (Mobile) */}
       <button
         onClick={openNewSale}
-        className="md:hidden fixed bottom-20 right-4 z-40 w-14 h-14 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-lg active:scale-95 transition-transform"
+        className="md:hidden fixed bottom-20 right-4 z-40 w-14 h-14 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-lg active:scale-95 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
       >
         <Plus size={26} />
       </button>
@@ -289,7 +290,7 @@ export default function SalesPage() {
           />
 
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-zinc-400">
+            <label className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-zinc-400">
               {t("sales.client")}
             </label>
             <SearchableSelect
@@ -298,183 +299,160 @@ export default function SalesPage() {
               onChange={setFormClientId}
               onAddNew={() => setNewClientSheet(true)}
               placeholder={t("sales.selectClient")}
-              addNewLabel={t("sales.addNewClient")}
             />
           </div>
 
           <Input
-            label={t("common.date")}
             type="date"
+            label={t("common.date")}
             value={formDate}
             onChange={(e) => setFormDate(e.target.value)}
           />
 
-          {/* Line items list */}
-          <div className="flex flex-col gap-2">
-            <label className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-zinc-400">
-              {t("sales.items")}
-            </label>
+          {/* Line items section */}
+          <div className="space-y-3 pt-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-zinc-400">
+                {t("sales.items")}
+              </label>
+              <button
+                type="button"
+                onClick={addLineItem}
+                className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
+              >
+                <Plus size={14} /> {t("common.add")}
+              </button>
+            </div>
 
-            <div className="flex flex-col gap-3">
-              {formItems.map((item, idx) => (
-                <div
-                  key={item.id}
-                  className="p-3 bg-gray-50 dark:bg-zinc-800/60 rounded-xl border border-gray-100 dark:border-zinc-800 flex flex-col gap-2.5"
-                >
-                  <div className="flex items-center justify-between text-xs font-semibold text-gray-500">
-                    <span>#{idx + 1}</span>
-                    {formItems.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => removeLineItem(item.id)}
-                        className="text-red-500 hover:text-red-600 font-medium"
-                      >
-                        {t("common.delete")}
-                      </button>
-                    )}
-                  </div>
-
-                  <SearchableSelect
-                    options={products.map((p) => ({
-                      id: p.id,
-                      label: p.name,
-                      subtitle: p.salePrice ? `${formatUZS(p.salePrice)} ${t("common.sum")}/${p.unit}` : undefined,
-                    }))}
-                    value={item.productId}
-                    onChange={(id) => updateLineItem(item.id, "productId", id)}
-                    placeholder={`${t("sales.product")}...`}
-                  />
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      label={t("sales.quantity")}
-                      type="number"
-                      step="any"
-                      min="0"
-                      value={item.quantity}
-                      onChange={(e) => updateLineItem(item.id, "quantity", e.target.value)}
-                    />
-                    <Input
-                      label={t("sales.price")}
-                      type="number"
-                      step="any"
-                      min="0"
-                      value={item.unitPrice}
-                      onChange={(e) => updateLineItem(item.id, "unitPrice", e.target.value)}
-                      disabled={item.isFreebie}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                      {t("sales.freebie")}
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={item.isFreebie}
-                      onChange={(e) => updateLineItem(item.id, "isFreebie", e.target.checked)}
-                      className="w-5 h-5 accent-blue-600 rounded cursor-pointer"
-                    />
-                  </div>
-
-                  {item.isFreebie && (
-                    <Input
-                      placeholder={`${t("sales.freebieFor")}...`}
-                      value={item.freebieFor}
-                      onChange={(e) => updateLineItem(item.id, "freebieFor", e.target.value)}
-                    />
-                  )}
-
-                  {!item.isFreebie && Number(item.quantity) > 0 && Number(item.unitPrice) > 0 && (
-                    <div className="text-right text-xs font-bold text-gray-600 dark:text-zinc-400">
-                      = {formatUZS(Number(item.quantity) * Number(item.unitPrice))} {t("common.sum")}
-                    </div>
+            {formItems.map((item, index) => (
+              <div
+                key={item.id}
+                className="p-3 bg-gray-50 dark:bg-[#1A202C] rounded-xl border border-gray-200/60 dark:border-zinc-800 space-y-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-gray-400">#{index + 1}</span>
+                  {formItems.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeLineItem(item.id)}
+                      className="text-xs text-rose-500 hover:text-rose-700"
+                    >
+                      <Trash2 size={16} />
+                    </button>
                   )}
                 </div>
-              ))}
 
-              <Button type="button" variant="secondary" size="sm" onClick={addLineItem}>
-                <Plus size={16} /> {t("common.add")} {t("sales.product")}
-              </Button>
-            </div>
-          </div>
+                <SearchableSelect
+                  options={products.map((p) => ({
+                    id: p.id,
+                    label: p.name,
+                    subtitle: p.salePrice ? formatUZS(p.salePrice) : undefined,
+                  }))}
+                  value={item.productId}
+                  onChange={(val) => updateLineItem(item.id, "productId", val)}
+                  placeholder={t("sales.product")}
+                />
 
-          <div className="flex justify-between items-center py-3 border-t border-gray-100 dark:border-zinc-800">
-            <span className="text-base font-bold text-gray-900 dark:text-white">
-              {t("common.total")}
-            </span>
-            <span className="text-xl font-extrabold text-blue-600 dark:text-blue-400">
-              {formatUZS(saleTotal)} {t("common.sum")}
-            </span>
+                <div className="grid grid-cols-2 gap-2">
+                  <Input
+                    type="number"
+                    placeholder={t("sales.quantity")}
+                    value={item.quantity}
+                    onChange={(e) => updateLineItem(item.id, "quantity", e.target.value)}
+                  />
+                  <Input
+                    type="number"
+                    placeholder={t("sales.price")}
+                    value={item.unitPrice}
+                    onChange={(e) => updateLineItem(item.id, "unitPrice", e.target.value)}
+                    disabled={item.isFreebie}
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="checkbox"
+                    id={`freebie-${item.id}`}
+                    checked={item.isFreebie}
+                    onChange={(e) => updateLineItem(item.id, "isFreebie", e.target.checked)}
+                    className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <label htmlFor={`freebie-${item.id}`} className="text-xs font-semibold text-gray-700 dark:text-zinc-300">
+                    {t("sales.freebie")}
+                  </label>
+                </div>
+
+                {item.isFreebie && (
+                  <Input
+                    placeholder={t("sales.freebieFor")}
+                    value={item.freebieFor}
+                    onChange={(e) => updateLineItem(item.id, "freebieFor", e.target.value)}
+                  />
+                )}
+              </div>
+            ))}
           </div>
 
           <Input
-            label={t("sales.paidAmount")}
             type="number"
-            step="any"
-            min="0"
-            placeholder="0"
+            label={t("sales.paidAmount")}
             value={formPayment}
             onChange={(e) => setFormPayment(e.target.value)}
+            placeholder="0"
           />
 
           {formErrors.length > 0 && (
-            <div className="flex flex-col gap-1">
-              {formErrors.map((err, i) => (
-                <div key={i} className="text-xs text-red-500 font-medium">
-                  {err}
-                </div>
+            <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 text-rose-600 dark:text-rose-400 rounded-xl text-xs space-y-1">
+              {formErrors.map((err, idx) => (
+                <div key={idx}>{err}</div>
               ))}
             </div>
           )}
 
-          <Button type="button" variant="primary" size="lg" onClick={handleSubmit} loading={isPending}>
-            {formType === "SALE" ? (
-              <>
-                <ShoppingCart size={18} /> {t("sales.newSale")}
-              </>
-            ) : (
-              <>
-                <RotateCcw size={18} /> {t("sales.returnType")}
-              </>
-            )}
+          {/* Form summary */}
+          <div className="p-4 bg-indigo-50/60 dark:bg-indigo-950/30 rounded-xl border border-indigo-100 dark:border-indigo-900/40 flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-zinc-400">
+              {t("common.total")}
+            </span>
+            <span className="text-xl font-extrabold text-indigo-600 dark:text-indigo-400 tabular-nums">
+              {formatUZS(saleTotal)}
+            </span>
+          </div>
+
+          <Button onClick={handleSubmit} loading={isPending} size="lg">
+            {t("common.save")}
           </Button>
         </div>
       </ModalSheet>
 
-      {/* Add Client mini-modal */}
-      <ModalSheet open={newClientSheet} onClose={() => setNewClientSheet(false)} title={t("sales.addNewClient")}>
+      {/* Inline New Client ModalSheet */}
+      <ModalSheet
+        open={newClientSheet}
+        onClose={() => setNewClientSheet(false)}
+        title={t("sales.addNewClient")}
+      >
         <div className="flex flex-col gap-4">
           <Input
             label={t("common.name")}
-            placeholder={`${t("common.name")}...`}
             value={newClientName}
             onChange={(e) => setNewClientName(e.target.value)}
-            autoFocus
+            placeholder="ООО Азия Трейд"
           />
-          <Button
-            type="button"
-            variant="primary"
-            size="lg"
-            onClick={handleAddClient}
-            disabled={!newClientName.trim()}
-            loading={isPending}
-          >
-            {t("common.add")}
+          <Button onClick={handleAddClient} loading={isPending} size="lg">
+            {t("common.save")}
           </Button>
         </div>
       </ModalSheet>
 
-      {/* Delete confirm dialog */}
+      {/* Confirm Delete */}
       <ConfirmDialog
         open={!!deleteConfirm}
         title={t("sales.deleteSale")}
         message={t("common.confirmDelete")}
-        confirmLabel={t("common.delete")}
         destructive
         onConfirm={() => deleteConfirm && handleDelete(deleteConfirm)}
         onCancel={() => setDeleteConfirm(null)}
       />
-    </>
+    </div>
   );
 }

@@ -36,6 +36,13 @@ enum StockMovementType {
   ADJUSTMENT
 }
 
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CARD
+  OTHER
+}
+
 // ─── Models ──────────────────────────────────────────────────────────────────
 
 model Client {
@@ -58,6 +65,7 @@ model InventoryItem {
   quantity  Decimal      @default(0) @db.Decimal(12, 3)
   costPrice Decimal      @default(0) @db.Decimal(14, 2)
   salePrice Decimal?     @db.Decimal(14, 2)
+  minStock  Decimal      @default(0) @db.Decimal(12, 3)
 
   saleItems      SaleItem[]
   stockMovements StockMovement[]
@@ -107,21 +115,24 @@ model SaleItem {
 }
 
 model Payment {
-  id       String   @id @default(cuid())
+  id       String        @id @default(cuid())
   clientId String
-  amount   Decimal  @db.Decimal(14, 2)
-  date     DateTime @default(now())
+  amount   Decimal       @db.Decimal(14, 2)
+  date     DateTime      @default(now())
   note     String?
+  method   PaymentMethod @default(CASH)
 
   client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
 }
 
 model FinanceEntry {
-  id              String      @id @default(cuid())
-  date            DateTime    @default(now())
+  id              String         @id @default(cuid())
+  date            DateTime       @default(now())
   type            FinanceType
   description     String
-  amount          Decimal     @db.Decimal(14, 2)
+  amount          Decimal        @db.Decimal(14, 2)
+  category        String?
+  paymentMethod   PaymentMethod?
   relatedClientId String?
   relatedSaleId   String?
 
@@ -145,4 +156,13 @@ model LiabilityEntry {
   name   String
   amount Decimal  @db.Decimal(14, 2)
   date   DateTime @default(now())
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  action      String
+  entity      String
+  entityId    String?
+  description String
+  createdAt   DateTime @default(now())
 }

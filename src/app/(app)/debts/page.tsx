@@ -7,8 +7,10 @@ import { formatUZS, formatDateShort } from "@/lib/format";
 import { getClientsWithDebt } from "@/app/actions/clients";
 import { useLanguage } from "@/lib/i18n/context";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { Table, TableRow } from "@/components/ui/Table";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { TableRowSkeleton } from "@/components/ui/Skeleton";
 
 type ClientWithDebt = Awaited<ReturnType<typeof getClientsWithDebt>>[number];
 
@@ -17,12 +19,14 @@ export default function DebtsPage() {
   const [clients, setClients] = useState<ClientWithDebt[]>([]);
   const [search, setSearch] = useState("");
   const [isPending, startTransition] = useTransition();
+  const [loading, setLoading] = useState(true);
   const router = useRouter();
 
   useEffect(() => {
     startTransition(async () => {
       const data = await getClientsWithDebt();
       setClients(data);
+      setLoading(false);
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -39,14 +43,14 @@ export default function DebtsPage() {
   };
 
   return (
-    <>
+    <div className="space-y-6">
       <PageHeader
         title={t("debts.title")}
         subtitle={
           totalDebt > 0 ? (
             <span>
               {t("debts.totalDebt")}:{" "}
-              <strong className="text-red-600 dark:text-red-400">
+              <strong className="text-orange-600 dark:text-orange-400 font-extrabold tabular-nums">
                 {formatUZS(totalDebt)} {t("common.sum")}
               </strong>
             </span>
@@ -55,85 +59,83 @@ export default function DebtsPage() {
       />
 
       {/* Search Input */}
-      <div className="relative mb-6">
+      <div className="relative max-w-md">
         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
         <input
-          className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-zinc-900 border border-gray-200/80 dark:border-zinc-800 rounded-xl outline-none text-base transition-all focus:ring-2 focus:ring-blue-500/20 text-gray-900 dark:text-white"
+          className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-[#1E2638] border border-gray-200/80 dark:border-zinc-800 rounded-xl text-base transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500/80 text-gray-900 dark:text-white"
           placeholder={`${t("debts.title")}...`}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
 
-      {/* Client List Grid */}
-      {isPending && clients.length === 0 ? (
-        <div className="py-12 text-center text-gray-500 dark:text-zinc-400 font-medium">
-          {t("common.loading")}
+      {/* Client List */}
+      {loading ? (
+        <div className="bg-white dark:bg-[#131823] rounded-2xl border border-gray-200/80 dark:border-zinc-800 divide-y divide-gray-100 dark:divide-zinc-800">
+          <TableRowSkeleton />
+          <TableRowSkeleton />
+          <TableRowSkeleton />
         </div>
       ) : filtered.length === 0 ? (
-        <Card className="flex flex-col items-center justify-center p-12 text-center">
-          <div className="w-14 h-14 rounded-full bg-gray-100 dark:bg-zinc-800 flex items-center justify-center text-gray-400 mb-3">
-            <Users size={28} />
-          </div>
-          <h3 className="text-base font-semibold text-gray-900 dark:text-white">
-            {t("common.noData")}
-          </h3>
-          <p className="text-sm text-gray-500 dark:text-zinc-400 mt-1">
-            {search ? t("common.search") : t("debts.title")}
-          </p>
-        </Card>
+        <EmptyState
+          icon={<Users size={28} />}
+          title={t("common.noData")}
+        />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <Table
+          headers={[
+            t("common.name"),
+            t("debts.totalSales"),
+            t("debts.totalPaid"),
+            t("debts.currentDebt"),
+            t("debts.lastSale"),
+            t("common.status"),
+          ]}
+          alignments={["left", "right", "right", "right", "right", "center"]}
+        >
           {filtered.map((client) => {
             const badge = getDebtBadge(client.debt);
             return (
-              <Card
+              <TableRow
                 key={client.id}
-                hoverable
                 onClick={() => router.push(`/debts/${client.id}`)}
-                className="flex flex-col justify-between gap-3"
               >
-                <div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-bold text-base text-gray-900 dark:text-white truncate">
-                      {client.name}
-                    </span>
-                    <Badge variant={badge.variant}>{badge.label}</Badge>
-                  </div>
-                  <div className="text-xs text-gray-500 dark:text-zinc-400 mt-1">
-                    {client.lastSaleDate ? (
-                      <>{t("debts.lastSale")}: {formatDateShort(client.lastSaleDate, language)}</>
-                    ) : (
-                      t("common.noData")
-                    )}
-                    {client.last30DaysSalesSum > 0 && (
-                      <> · 30d: {formatUZS(client.last30DaysSalesSum)}</>
-                    )}
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-gray-100 dark:border-zinc-800 flex items-center justify-between">
-                  <span className="text-xs font-semibold text-gray-500">
-                    {t("debts.clientProfile")}
-                  </span>
-                  <span
-                    className={`text-lg font-extrabold tracking-tight ${
-                      client.debt > 0
-                        ? "text-red-600 dark:text-red-400"
-                        : client.debt < 0
-                        ? "text-blue-600 dark:text-blue-400"
-                        : "text-emerald-600 dark:text-emerald-400"
-                    }`}
-                  >
-                    {formatUZS(client.debt)}{" "}
-                    <span className="text-xs font-normal text-gray-500">{t("common.sum")}</span>
-                  </span>
-                </div>
-              </Card>
+                <td className="p-3.5 sm:p-4">
+                  <div className="font-extrabold text-gray-900 dark:text-white">{client.name}</div>
+                  {client.last30DaysSalesSum > 0 && (
+                    <div className="text-xs text-gray-500 dark:text-zinc-400 tabular-nums">
+                      30d: {formatUZS(client.last30DaysSalesSum)}
+                    </div>
+                  )}
+                </td>
+                <td className="p-3.5 sm:p-4 text-right whitespace-nowrap text-gray-700 dark:text-zinc-300 font-semibold tabular-nums">
+                  {formatUZS(client.totalSalesValue)}
+                </td>
+                <td className="p-3.5 sm:p-4 text-right whitespace-nowrap text-emerald-600 dark:text-emerald-400 font-semibold tabular-nums">
+                  {formatUZS(client.totalPaid)}
+                </td>
+                <td
+                  className={`p-3.5 sm:p-4 text-right whitespace-nowrap font-extrabold tabular-nums ${
+                    client.debt > 0
+                      ? "text-orange-600 dark:text-orange-400"
+                      : client.debt < 0
+                      ? "text-indigo-600 dark:text-indigo-400"
+                      : "text-emerald-600 dark:text-emerald-400"
+                  }`}
+                >
+                  {formatUZS(client.debt)}
+                </td>
+                <td className="p-3.5 sm:p-4 text-right whitespace-nowrap text-xs text-gray-500 dark:text-zinc-400 font-medium">
+                  {client.lastSaleDate ? formatDateShort(client.lastSaleDate, language) : "—"}
+                </td>
+                <td className="p-3.5 sm:p-4 text-center">
+                  <Badge variant={badge.variant}>{badge.label}</Badge>
+                </td>
+              </TableRow>
             );
           })}
-        </div>
+        </Table>
       )}
-    </>
+    </div>
   );
 }
