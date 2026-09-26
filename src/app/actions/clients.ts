@@ -5,6 +5,12 @@ import { ClientSchema } from "@/lib/validations";
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 
+function safeRevalidate(path: string) {
+  try {
+    revalidatePath(path);
+  } catch {}
+}
+
 const OPENING_BALANCE_ITEM_NAME = "__OPENING_BALANCE__";
 
 async function getOrCreateOpeningBalanceItem(tx: Prisma.TransactionClient) {
@@ -83,8 +89,8 @@ export async function createClient(data: unknown) {
     });
   }
 
-  revalidatePath("/debts");
-  revalidatePath("/sales");
+  safeRevalidate("/debts");
+  safeRevalidate("/sales");
   return client;
 }
 
@@ -102,7 +108,7 @@ export async function updateClient(id: string, data: unknown) {
         : null,
     },
   });
-  revalidatePath("/debts");
+  safeRevalidate("/debts");
   return client;
 }
 
