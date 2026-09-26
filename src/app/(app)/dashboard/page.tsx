@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useTransition } from "react";
+import { useState, useEffect, useTransition, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   ShoppingCart,
@@ -15,9 +15,14 @@ import {
   CreditCard,
   Clock,
   Banknote,
+  Calendar,
+  ChevronDown,
+  Plus,
+  X,
+  Check,
 } from "lucide-react";
-import { formatUZS, formatDateShort } from "@/lib/format";
-import { getDashboardData } from "@/app/actions/dashboard";
+import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
+import { getDashboardData, type PeriodPreset } from "@/app/actions/dashboard";
 import { useLanguage } from "@/lib/i18n/context";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
@@ -31,12 +36,63 @@ export default function DashboardPage() {
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
+  // Period Preset for "Итоги за период" (default "TODAY")
+  const [periodPreset, setPeriodPreset] = useState<PeriodPreset>("TODAY");
+  const [customFrom, setCustomFrom] = useState(formatDateInput(new Date()));
+  const [customTo, setCustomTo] = useState(formatDateInput(new Date()));
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // asOfDate for "Текущая позиция"
+  const [asOfDate, setAsOfDate] = useState<string>("");
+  const [asOfPickerOpen, setAsOfPickerOpen] = useState(false);
+
+  // Close dropdown on outside click
   useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const fetchData = (preset: PeriodPreset, from?: string, to?: string, asOf?: string) => {
     startTransition(async () => {
-      const d = await getDashboardData();
+      const d = await getDashboardData({
+        periodPreset: preset,
+        dateFrom: preset === "CUSTOM" ? from : undefined,
+        dateTo: preset === "CUSTOM" ? to : undefined,
+        asOfDate: asOf || undefined,
+      });
       setData(d);
     });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  };
+
+  useEffect(() => {
+    fetchData(periodPreset, customFrom, customTo, asOfDate);
+  }, [periodPreset, asOfDate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const getPeriodLabel = () => {
+    switch (periodPreset) {
+      case "TODAY":
+        return t("common.today");
+      case "7_DAYS":
+        return t("common.days7");
+      case "30_DAYS":
+        return t("common.days30");
+      case "THIS_MONTH":
+        return t("common.thisMonth");
+      case "CUSTOM":
+        if (customFrom && customTo) {
+          return `${formatDateShort(customFrom, language)} – ${formatDateShort(customTo, language)}`;
+        }
+        return t("common.custom");
+      default:
+        return t("common.today");
+    }
+  };
 
   if (!data) {
     return (
@@ -56,7 +112,7 @@ export default function DashboardPage() {
     <div className="space-y-6">
       <PageHeader title={t("dashboard.title")} />
 
-      {/* ─── Today's Stats ─── */}
+      {/* ─── Today's Stats (Strictly today-only, unaffected by date controls) ─── */}
       <section className="space-y-3">
         <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400 px-1">
           {t("dashboard.todayStats")}
@@ -96,12 +152,72 @@ export default function DashboardPage() {
       {/* ─── Divider ─── */}
       <div className="border-t border-gray-200/60 dark:border-zinc-800/40" />
 
-      {/* ─── Current Financial Position ─── */}
+      {/* ─── Current Financial Position (Live Balance Snapshot, or as of date) ─── */}
       <section className="space-y-3">
-        <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400 px-1">
-          {t("dashboard.currentPosition")}
-        </h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+          <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400">
+            {t("dashboard.currentPosition")}
+          </h3>
+
+          {/* "+ Дата" Snapshot Date Control */}
+          <div className="flex items-center gap-2">
+            {!asOfDate ? (
+              asOfPickerOpen ? (
+                <div className="flex items-center gap-1.5 bg-white dark:bg-[#1A2234] border border-gray-200 dark:border-zinc-800 px-2.5 py-1 rounded-xl shadow-xs animate-in fade-in duration-150">
+                  <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+                    {language === "ru" ? "На дату:" : language === "uz" ? "Sana:" : "As of:"}
+                  </span>
+                  <input
+                    type="date"
+                    defaultValue={formatDateInput(new Date())}
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        setAsOfDate(e.target.value);
+                        setAsOfPickerOpen(false);
+                      }
+                    }}
+                    className="bg-transparent text-xs font-semibold text-gray-900 dark:text-white outline-none cursor-pointer"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setAsOfPickerOpen(false)}
+                    className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-0.5 rounded cursor-pointer"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  id="dashboard-asof-trigger"
+                  onClick={() => setAsOfPickerOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-gray-200 dark:border-zinc-800 bg-white dark:bg-[#1A2234] hover:bg-gray-50 dark:hover:bg-[#232D42] text-xs font-bold text-gray-700 dark:text-gray-200 shadow-xs transition-colors cursor-pointer"
+                >
+                  <Plus size={13} className="text-indigo-500" />
+                  <span>{language === "ru" ? "Дата" : language === "uz" ? "Sana" : "Date"}</span>
+                </button>
+              )
+            ) : (
+              <div className="flex items-center gap-2 bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200/80 dark:border-indigo-800/40 px-3 py-1 rounded-xl text-xs font-bold text-indigo-700 dark:text-indigo-300">
+                <Calendar size={13} />
+                <span>
+                  {language === "ru" ? "На дату:" : language === "uz" ? "Sana:" : "As of:"}{" "}
+                  {formatDateShort(asOfDate, language)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setAsOfDate("")}
+                  title={language === "ru" ? "Сбросить к текущему" : "Reset to live"}
+                  className="hover:bg-indigo-200/50 dark:hover:bg-indigo-800/50 p-0.5 rounded transition-colors cursor-pointer"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className={`grid grid-cols-2 md:grid-cols-4 gap-3.5 ${isPending ? "opacity-75 transition-opacity" : ""}`}>
           <StatCard
             label={t("dashboard.totalReceivables")}
             value={formatUZS(data.position.totalReceivables)}
@@ -136,36 +252,166 @@ export default function DashboardPage() {
       {/* ─── Divider ─── */}
       <div className="border-t border-gray-200/60 dark:border-zinc-800/40" />
 
-      {/* ─── Bottom Summary Row ─── */}
+      {/* ─── Bottom Summary Row (Period-Filtered Performance) ─── */}
       <section className="space-y-3">
-        <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400 px-1">
-          {t("dashboard.summaryRow")}
-        </h3>
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+          <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400">
+            {t("dashboard.summaryRow")}
+          </h3>
+
+          {/* Period Selector Dropdown Trigger & Menu */}
+          <div className="relative" ref={dropdownRef}>
+            <button
+              type="button"
+              id="dashboard-period-trigger"
+              onClick={() => setDropdownOpen(!dropdownOpen)}
+              className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl border border-gray-200 dark:border-zinc-800 bg-white dark:bg-[#1A2234] hover:bg-gray-50 dark:hover:bg-[#232D42] text-xs sm:text-sm font-bold text-gray-800 dark:text-gray-100 shadow-xs transition-colors cursor-pointer"
+            >
+              <Calendar size={14} className="text-indigo-600 dark:text-indigo-400" />
+              <span>{getPeriodLabel()}</span>
+              <ChevronDown
+                size={14}
+                className={`text-gray-400 transition-transform duration-200 ${
+                  dropdownOpen ? "rotate-180" : ""
+                }`}
+              />
+            </button>
+
+            {dropdownOpen && (
+              <div className="absolute right-0 top-full mt-1.5 z-40 w-64 rounded-xl border border-gray-200 dark:border-zinc-800 bg-white dark:bg-[#161D2B] p-2 shadow-xl space-y-1 animate-in fade-in slide-in-from-top-1 duration-150">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPeriodPreset("TODAY");
+                    setDropdownOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-lg transition-colors text-left cursor-pointer ${
+                    periodPreset === "TODAY"
+                      ? "bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 font-bold"
+                      : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-800/60"
+                  }`}
+                >
+                  <span>{t("common.today")}</span>
+                  {periodPreset === "TODAY" && <Check size={14} />}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPeriodPreset("7_DAYS");
+                    setDropdownOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-lg transition-colors text-left cursor-pointer ${
+                    periodPreset === "7_DAYS"
+                      ? "bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 font-bold"
+                      : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-800/60"
+                  }`}
+                >
+                  <span>{t("common.days7")}</span>
+                  {periodPreset === "7_DAYS" && <Check size={14} />}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPeriodPreset("30_DAYS");
+                    setDropdownOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-lg transition-colors text-left cursor-pointer ${
+                    periodPreset === "30_DAYS"
+                      ? "bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 font-bold"
+                      : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-800/60"
+                  }`}
+                >
+                  <span>{t("common.days30")}</span>
+                  {periodPreset === "30_DAYS" && <Check size={14} />}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPeriodPreset("THIS_MONTH");
+                    setDropdownOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-lg transition-colors text-left cursor-pointer ${
+                    periodPreset === "THIS_MONTH"
+                      ? "bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 font-bold"
+                      : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-800/60"
+                  }`}
+                >
+                  <span>{t("common.thisMonth")}</span>
+                  {periodPreset === "THIS_MONTH" && <Check size={14} />}
+                </button>
+
+                {/* Custom Date Range Option */}
+                <div className="pt-1 border-t border-gray-100 dark:border-zinc-800">
+                  <div className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                    {t("common.custom")}
+                  </div>
+                  <div className="px-3 pb-2 space-y-2">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-gray-400 text-[11px] w-6">{t("common.from")}:</span>
+                      <input
+                        type="date"
+                        value={customFrom}
+                        onChange={(e) => setCustomFrom(e.target.value)}
+                        className="flex-1 px-2 py-1 rounded-lg border border-gray-200 dark:border-zinc-800 bg-gray-50 dark:bg-zinc-900 text-xs font-medium text-gray-900 dark:text-white"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-gray-400 text-[11px] w-6">{t("common.to")}:</span>
+                      <input
+                        type="date"
+                        value={customTo}
+                        onChange={(e) => setCustomTo(e.target.value)}
+                        className="flex-1 px-2 py-1 rounded-lg border border-gray-200 dark:border-zinc-800 bg-gray-50 dark:bg-zinc-900 text-xs font-medium text-gray-900 dark:text-white"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPeriodPreset("CUSTOM");
+                        fetchData("CUSTOM", customFrom, customTo, asOfDate);
+                        setDropdownOpen(false);
+                      }}
+                      className="w-full mt-1 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      {language === "ru" ? "Применить" : language === "uz" ? "Qo'llash" : "Apply"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className={`grid grid-cols-2 md:grid-cols-4 gap-3.5 ${isPending ? "opacity-75 transition-opacity" : ""}`}>
           <StatCard
             label={t("dashboard.totalSales")}
-            value={formatUZS(data.position.totalSales)}
+            value={formatUZS(data.periodSummary.totalSales)}
             icon={<ShoppingCart size={18} />}
             theme="indigo"
+            onClick={() => router.push("/sales")}
           />
           <StatCard
             label={t("dashboard.payment")}
-            value={formatUZS(data.today.totalPayments)}
+            value={formatUZS(data.periodSummary.totalPayments)}
             icon={<Banknote size={18} />}
             theme="emerald"
-            onClick={() => router.push("/debts")}
+            onClick={() => router.push("/finance")}
           />
           <StatCard
             label={t("dashboard.totalExpenses")}
-            value={formatUZS(data.position.totalExpenses)}
+            value={formatUZS(data.periodSummary.totalExpenses)}
             icon={<TrendingDown size={18} />}
             theme="rose"
+            onClick={() => router.push("/finance")}
           />
           <StatCard
             label={t("dashboard.netProfit")}
-            value={formatUZS(data.position.netProfit)}
+            value={formatUZS(data.periodSummary.netProfit)}
             icon={<TrendingUp size={18} />}
-            theme={data.position.netProfit >= 0 ? "emerald" : "rose"}
+            theme={data.periodSummary.netProfit >= 0 ? "emerald" : "rose"}
             onClick={() => router.push("/report")}
           />
         </div>

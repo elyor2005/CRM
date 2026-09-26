@@ -209,9 +209,10 @@ export default function FinancePage() {
               size="md"
               onClick={handleExportExcel}
               disabled={entries.length === 0}
+              className="min-h-[44px] gap-2 px-3.5 bg-white dark:bg-[#131823] border-gray-200/80 dark:border-zinc-800 hover:bg-gray-50 dark:hover:bg-zinc-800/60 shadow-xs"
             >
-              <Download size={16} />
-              <span className="hidden sm:inline">{t("common.exportExcel")}</span>
+              <Download size={16} className="text-gray-500 dark:text-zinc-400" />
+              <span className="text-xs sm:text-sm font-bold">{t("common.exportExcel")}</span>
             </Button>
             <Button
               onClick={() => {
@@ -250,31 +251,27 @@ export default function FinancePage() {
       </div>
 
       {/* Filter Toolbar */}
-      <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center">
-        <div className="w-full md:w-auto">
-          <SegmentedControl
-            value={filter}
-            onChange={(v) => setFilter(v as typeof filter)}
-            options={[
-              { value: "ALL", label: t("common.all") },
-              { value: "INCOME", label: t("finance.income") },
-              { value: "EXPENSE", label: t("finance.expense") },
-            ]}
-          />
-        </div>
-        <div className="w-full md:w-auto">
-          <SegmentedControl
-            value={datePreset}
-            onChange={(v) => setDatePreset(v as DatePreset)}
-            options={[
-              { value: "ALL", label: t("common.all") },
-              { value: "TODAY", label: t("common.today") },
-              { value: "WEEK", label: t("common.thisWeek") },
-              { value: "MONTH", label: t("common.thisMonth") },
-              { value: "CUSTOM", label: t("common.custom") },
-            ]}
-          />
-        </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <SegmentedControl
+          value={filter}
+          onChange={(v) => setFilter(v as typeof filter)}
+          options={[
+            { value: "ALL", label: t("common.all") },
+            { value: "INCOME", label: t("finance.income") },
+            { value: "EXPENSE", label: t("finance.expense") },
+          ]}
+        />
+        <SegmentedControl
+          value={datePreset}
+          onChange={(v) => setDatePreset(v as DatePreset)}
+          options={[
+            { value: "ALL", label: t("common.all") },
+            { value: "TODAY", label: t("common.today") },
+            { value: "WEEK", label: t("common.thisWeek") },
+            { value: "MONTH", label: t("common.thisMonth") },
+            { value: "CUSTOM", label: t("common.custom") },
+          ]}
+        />
       </div>
 
       {datePreset === "CUSTOM" && (

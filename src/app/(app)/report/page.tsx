@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useTransition } from "react";
-import { Plus, Trash2, Download } from "lucide-react";
+import { Plus, Trash2, Download, Calendar } from "lucide-react";
 import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
@@ -241,16 +241,17 @@ export default function ReportPage() {
         action={
           <div className="flex flex-wrap items-center gap-2">
             {tab === "BALANCE" ? (
-              /* 8a. Historical Balance Date Picker */
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-gray-500 dark:text-zinc-400">
-                  {language === "ru" ? "На дату:" : language === "uz" ? "Sana bo'yicha:" : "As of:"}
+              /* 8a. Historical Balance Date Picker (Unified Premium Capsule) */
+              <div className="flex items-center bg-white dark:bg-[#131823] border border-gray-200/80 dark:border-zinc-800 rounded-xl px-3.5 py-2 shadow-xs hover:border-gray-300 dark:hover:border-zinc-700 transition-all gap-2.5 min-h-[44px]">
+                <Calendar size={16} className="text-indigo-500 dark:text-indigo-400 shrink-0" />
+                <span className="text-xs font-bold text-gray-500 dark:text-zinc-400 whitespace-nowrap">
+                  {language === "ru" ? "На дату:" : language === "uz" ? "Sana:" : "As of:"}
                 </span>
                 <input
                   type="date"
                   value={balanceDate}
                   onChange={(e) => setBalanceDate(e.target.value)}
-                  className="px-3 py-1.5 bg-gray-100 dark:bg-[#1E2638] text-gray-900 dark:text-white rounded-xl text-xs font-bold border border-gray-200/60 dark:border-zinc-800 outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="bg-transparent text-gray-900 dark:text-white text-xs sm:text-sm font-bold outline-none cursor-pointer dark:[color-scheme:dark]"
                 />
               </div>
             ) : (
@@ -266,28 +267,33 @@ export default function ReportPage() {
                   ]}
                 />
                 {profitDatePreset === "CUSTOM" && (
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center bg-white dark:bg-[#131823] border border-gray-200/80 dark:border-zinc-800 rounded-xl px-3 py-1.5 gap-2 min-h-[44px] shadow-xs">
                     <input
                       type="date"
                       value={profitCustomFrom}
                       onChange={(e) => setProfitCustomFrom(e.target.value)}
-                      className="px-2.5 py-1.5 bg-gray-100 dark:bg-[#1E2638] text-gray-900 dark:text-white rounded-xl text-xs font-bold border border-gray-200/60 dark:border-zinc-800 outline-none"
+                      className="bg-transparent text-gray-900 dark:text-white text-xs sm:text-sm font-semibold outline-none cursor-pointer dark:[color-scheme:dark]"
                     />
-                    <span className="text-xs text-gray-400">—</span>
+                    <span className="text-xs text-gray-400 font-bold">—</span>
                     <input
                       type="date"
                       value={profitCustomTo}
                       onChange={(e) => setProfitCustomTo(e.target.value)}
-                      className="px-2.5 py-1.5 bg-gray-100 dark:bg-[#1E2638] text-gray-900 dark:text-white rounded-xl text-xs font-bold border border-gray-200/60 dark:border-zinc-800 outline-none"
+                      className="bg-transparent text-gray-900 dark:text-white text-xs sm:text-sm font-semibold outline-none cursor-pointer dark:[color-scheme:dark]"
                     />
                   </div>
                 )}
               </div>
             )}
 
-            <Button variant="outline" size="md" onClick={handleExportExcel}>
-              <Download size={16} />
-              <span className="hidden sm:inline">{t("common.exportExcel")}</span>
+            <Button
+              variant="outline"
+              size="md"
+              onClick={handleExportExcel}
+              className="min-h-[44px] gap-2 px-3.5 bg-white dark:bg-[#131823] border-gray-200/80 dark:border-zinc-800 hover:bg-gray-50 dark:hover:bg-zinc-800/60 shadow-xs"
+            >
+              <Download size={16} className="text-gray-500 dark:text-zinc-400" />
+              <span className="text-xs sm:text-sm font-bold">{t("common.exportExcel")}</span>
             </Button>
           </div>
         }

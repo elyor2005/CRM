@@ -7,28 +7,79 @@ const OPENING_BALANCE_ITEM_NAME = "__OPENING_BALANCE__";
 /**
  * Get all dashboard data in a single parallel call for maximum performance.
  */
-export async function getDashboardData() {
+export type PeriodPreset = "TODAY" | "7_DAYS" | "30_DAYS" | "THIS_MONTH" | "CUSTOM";
+
+export interface DashboardOptions {
+  periodPreset?: PeriodPreset;
+  dateFrom?: string;
+  dateTo?: string;
+  asOfDate?: string;
+}
+
+/**
+ * Get all dashboard data in a single parallel call for maximum performance.
+ * Supports period presets for "Итоги за период" and asOfDate for "Текущая позиция".
+ */
+export async function getDashboardData(options?: DashboardOptions) {
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const endOfDay = new Date(startOfDay);
   endOfDay.setDate(endOfDay.getDate() + 1);
+
+  // Period range for "Итоги за период" (default TODAY)
+  const preset: PeriodPreset = options?.periodPreset || "TODAY";
+  let periodStart: Date = startOfDay;
+  let periodEnd: Date = endOfDay;
+
+  if (preset === "7_DAYS") {
+    periodStart = new Date(startOfDay);
+    periodStart.setDate(periodStart.getDate() - 7);
+    periodEnd = endOfDay;
+  } else if (preset === "30_DAYS") {
+    periodStart = new Date(startOfDay);
+    periodStart.setDate(periodStart.getDate() - 30);
+    periodEnd = endOfDay;
+  } else if (preset === "THIS_MONTH") {
+    periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    periodEnd = endOfDay;
+  } else if (preset === "CUSTOM") {
+    if (options?.dateFrom) {
+      periodStart = new Date(options.dateFrom);
+    }
+    if (options?.dateTo) {
+      periodEnd = new Date(options.dateTo);
+      periodEnd.setHours(23, 59, 59, 999);
+    }
+  }
+
+  // asOfDate for "Текущая позиция"
+  const asOf = options?.asOfDate ? new Date(options.asOfDate) : null;
+  if (asOf) {
+    asOf.setHours(23, 59, 59, 999);
+  }
+  const asOfFilter = asOf ? { lte: asOf } : undefined;
+  const isPeriodToday = preset === "TODAY";
 
   // Single parallel batch for all independent database queries
   const [
     todaySales,
     todayFinance,
     todayPayments,
+    periodSales,
+    periodReturns,
+    periodIncome,
+    periodExpense,
     allIncome,
     allExpense,
     allItems,
     allClients,
-    allSales,
     recentSales,
     recentPayments,
     recentExpenses,
     recentMovements,
     liabilitiesTotal,
   ] = await Promise.all([
+    // Today stats (strictly startOfDay to endOfDay)
     prisma.sale.findMany({
       where: { date: { gte: startOfDay, lt: endOfDay }, type: "SALE" },
       include: { items: true },
@@ -39,12 +90,40 @@ export async function getDashboardData() {
     prisma.payment.findMany({
       where: { date: { gte: startOfDay, lt: endOfDay } },
     }),
+
+    // Period summary queries
+    isPeriodToday
+      ? Promise.resolve([])
+      : prisma.sale.findMany({
+          where: { date: { gte: periodStart, lte: periodEnd }, type: "SALE" },
+          include: { items: true },
+        }),
+    isPeriodToday
+      ? Promise.resolve([])
+      : prisma.sale.findMany({
+          where: { date: { gte: periodStart, lte: periodEnd }, type: "RETURN" },
+          include: { items: true },
+        }),
+    isPeriodToday
+      ? Promise.resolve(null)
+      : prisma.financeEntry.aggregate({
+          where: { type: "INCOME", date: { gte: periodStart, lte: periodEnd } },
+          _sum: { amount: true },
+        }),
+    isPeriodToday
+      ? Promise.resolve(null)
+      : prisma.financeEntry.aggregate({
+          where: { type: "EXPENSE", date: { gte: periodStart, lte: periodEnd } },
+          _sum: { amount: true },
+        }),
+
+    // Current position balance queries (as of date if specified, otherwise live)
     prisma.financeEntry.aggregate({
-      where: { type: "INCOME" },
+      where: { type: "INCOME", ...(asOfFilter ? { date: asOfFilter } : {}) },
       _sum: { amount: true },
     }),
     prisma.financeEntry.aggregate({
-      where: { type: "EXPENSE" },
+      where: { type: "EXPENSE", ...(asOfFilter ? { date: asOfFilter } : {}) },
       _sum: { amount: true },
     }),
     prisma.inventoryItem.findMany({
@@ -52,17 +131,20 @@ export async function getDashboardData() {
         isSystem: false,
         NOT: { name: OPENING_BALANCE_ITEM_NAME },
       },
+      include: asOf ? { stockMovements: true } : undefined,
     }),
     prisma.client.findMany({
       include: {
-        sales: { include: { items: true } },
-        payments: true,
+        sales: {
+          where: asOfFilter ? { date: asOfFilter } : undefined,
+          include: { items: true },
+        },
+        payments: {
+          where: asOfFilter ? { date: asOfFilter } : undefined,
+        },
       },
     }),
-    prisma.sale.findMany({
-      where: { type: "SALE" },
-      include: { items: true },
-    }),
+    // Recent activity
     prisma.sale.findMany({
       include: { client: true, items: true },
       orderBy: { date: "desc" },
@@ -84,11 +166,12 @@ export async function getDashboardData() {
       take: 5,
     }),
     prisma.liabilityEntry.aggregate({
+      where: asOfFilter ? { date: asOfFilter } : undefined,
       _sum: { amount: true },
     }),
   ]);
 
-  // Today Calculations
+  // Today Calculations (Strictly today, unaffected by period selector)
   let todaySalesTotal = 0;
   for (const sale of todaySales) {
     todaySalesTotal += sale.items.reduce(
@@ -110,15 +193,83 @@ export async function getDashboardData() {
     .filter((e) => e.type === "EXPENSE")
     .reduce((sum, e) => sum + Number(e.amount), 0);
 
-  // Position Calculations
+  const todayTotalPayments =
+    todayFinance.filter(e => e.type === "INCOME").reduce((sum, e) => sum + Number(e.amount), 0);
+
+  // Period Calculations ("Итоги за период")
+  let periodSalesTotal = 0;
+  let periodCOGS = 0;
+
+  const actualPeriodSales = isPeriodToday ? todaySales : (periodSales as typeof todaySales);
+  for (const sale of actualPeriodSales) {
+    for (const item of sale.items) {
+      periodSalesTotal += Number(item.lineTotal);
+      const product = allItems.find((p) => p.id === item.productId);
+      if (product) {
+        periodCOGS += Number(item.quantity) * Number(product.costPrice);
+      }
+    }
+  }
+
+  // Returns in period
+  let periodReturnsTotal = 0;
+  let periodReturnsCOGS = 0;
+  if (!isPeriodToday && Array.isArray(periodReturns)) {
+    for (const ret of periodReturns as typeof todaySales) {
+      for (const item of ret.items) {
+        periodReturnsTotal += Number(item.lineTotal);
+        const product = allItems.find((p) => p.id === item.productId);
+        if (product) {
+          periodReturnsCOGS += Number(item.quantity) * Number(product.costPrice);
+        }
+      }
+    }
+  }
+
+  const periodNetSales = periodSalesTotal - periodReturnsTotal;
+  const periodEffectiveCOGS = periodCOGS - periodReturnsCOGS;
+  const periodGrossProfit = periodNetSales - periodEffectiveCOGS;
+
+  const periodPaymentsTotal = isPeriodToday
+    ? todayTotalPayments
+    : Number(periodIncome?._sum.amount || 0);
+
+  const periodExpensesTotal = isPeriodToday
+    ? todayExpenses
+    : Number(periodExpense?._sum.amount || 0);
+
+  const periodNetProfit = periodGrossProfit - periodExpensesTotal;
+
+  // Position Calculations ("Текущая позиция" - live or as of date)
   const cashBalance =
     Number(allIncome._sum.amount || 0) - Number(allExpense._sum.amount || 0);
 
-  // Finished goods value at SALE PRICE (Task 1c — renamed card)
+  // Finished goods value at SALE PRICE
   let finishedGoodsSaleValue = 0;
   for (const item of allItems) {
     if (item.category === "FINISHED_GOOD" && item.name !== OPENING_BALANCE_ITEM_NAME) {
-      finishedGoodsSaleValue += Number(item.quantity) * Number(item.salePrice || 0);
+      let qty = Number(item.quantity);
+      if (asOf && "stockMovements" in item && Array.isArray((item as any).stockMovements)) {
+        for (const mov of (item as any).stockMovements) {
+          if (new Date(mov.date) > asOf) {
+            const mQty = Number(mov.quantity);
+            if (mov.type === "PRODUCTION_IN" || mov.type === "RETURN_IN") {
+              qty -= mQty;
+            } else if (
+              mov.type === "SALE_OUT" ||
+              mov.type === "DEFECT" ||
+              mov.type === "BONUS" ||
+              mov.type === "PRODUCTION_CONSUME"
+            ) {
+              qty += mQty;
+            } else if (mov.type === "ADJUSTMENT") {
+              qty -= mQty;
+            }
+          }
+        }
+        if (qty < 0) qty = 0;
+      }
+      finishedGoodsSaleValue += qty * Number(item.salePrice || 0);
     }
   }
 
@@ -143,34 +294,8 @@ export async function getDashboardData() {
     if (debt > 0) totalReceivables += debt;
   }
 
-  let totalSalesAllTime = 0;
-  for (const sale of allSales) {
-    totalSalesAllTime += sale.items.reduce(
-      (sum, item) => sum + Number(item.lineTotal),
-      0
-    );
-  }
-
-  let totalCOGS = 0;
-  for (const sale of allSales) {
-    for (const item of sale.items) {
-      const product = allItems.find((p) => p.id === item.productId);
-      if (product) {
-        totalCOGS += Number(item.quantity) * Number(product.costPrice);
-      }
-    }
-  }
-
-  const grossProfit = totalSalesAllTime - totalCOGS;
-  const totalExpenses = Number(allExpense._sum.amount || 0);
-  const netProfit = grossProfit - totalExpenses;
-
-  // Liabilities total (Task 1c)
+  // Liabilities total
   const liabTotal = Number(liabilitiesTotal._sum.amount || 0);
-
-  // Today's total payments (sale-time + standalone) — for the "Оплата" card (Task 1c)
-  const todayTotalPayments =
-    todayFinance.filter(e => e.type === "INCOME").reduce((sum, e) => sum + Number(e.amount), 0);
 
   // Alerts
   const lowStockItems = allItems.filter(
@@ -259,10 +384,17 @@ export async function getDashboardData() {
       finishedGoodsSaleValue,
       cashBalance,
       liabilitiesTotal: liabTotal,
-      totalSales: totalSalesAllTime,
-      totalExpenses,
-      grossProfit,
-      netProfit,
+      totalSales: periodNetSales,
+      totalExpenses: periodExpensesTotal,
+      grossProfit: periodGrossProfit,
+      netProfit: periodNetProfit,
+    },
+    periodSummary: {
+      totalSales: periodNetSales,
+      totalPayments: periodPaymentsTotal,
+      totalExpenses: periodExpensesTotal,
+      grossProfit: periodGrossProfit,
+      netProfit: periodNetProfit,
     },
     alerts: {
       lowStockItems: lowStockItems.map((i) => ({

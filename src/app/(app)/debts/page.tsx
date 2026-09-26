@@ -205,9 +205,10 @@ export default function DebtsPage() {
               size="md"
               onClick={handleExportExcel}
               disabled={sorted.length === 0}
+              className="min-h-[44px] gap-2 px-3.5 bg-white dark:bg-[#131823] border-gray-200/80 dark:border-zinc-800 hover:bg-gray-50 dark:hover:bg-zinc-800/60 shadow-xs"
             >
-              <Download size={16} />
-              <span className="hidden sm:inline">{t("common.exportExcel")}</span>
+              <Download size={16} className="text-gray-500 dark:text-zinc-400" />
+              <span className="text-xs sm:text-sm font-bold">{t("common.exportExcel")}</span>
             </Button>
             <Button onClick={() => setNewClientSheet(true)} size="md">
               <Plus size={18} /> {t("clients.addClient")}
