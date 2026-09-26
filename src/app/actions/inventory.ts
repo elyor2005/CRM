@@ -18,8 +18,14 @@ function safeRevalidate(path: string) {
   } catch {}
 }
 
+export const REAL_ITEMS_FILTER: Prisma.InventoryItemWhereInput = {
+  isSystem: false,
+  NOT: { name: "__OPENING_BALANCE__" },
+};
+
 export async function getInventoryByCategory() {
   const items = await prisma.inventoryItem.findMany({
+    where: REAL_ITEMS_FILTER,
     orderBy: { name: "asc" },
   });
 
@@ -34,6 +40,108 @@ export async function getInventoryByCategory() {
   }
 
   return groups;
+}
+
+export async function getFinishedGoodsMovementBreakdown(options?: {
+  dateFrom?: string;
+  dateTo?: string;
+}) {
+  const items = await prisma.inventoryItem.findMany({
+    where: {
+      category: "FINISHED_GOOD",
+      ...REAL_ITEMS_FILTER,
+    },
+    include: {
+      stockMovements: {
+        orderBy: { date: "asc" },
+      },
+    },
+    orderBy: { name: "asc" },
+  });
+
+  const hasFrom = !!options?.dateFrom;
+  const hasTo = !!options?.dateTo;
+  const fromDate = hasFrom ? new Date(options!.dateFrom!) : null;
+  const toDate = hasTo ? new Date(options!.dateTo!) : null;
+  if (toDate) {
+    toDate.setHours(23, 59, 59, 999);
+  }
+
+  return items.map((item) => {
+    const currentQty = Number(item.quantity);
+    let openingBalance = currentQty;
+
+    let productionIn = 0;
+    let returnIn = 0;
+    let defect = 0;
+    let bonus = 0;
+    let saleOut = 0;
+
+    for (const mov of item.stockMovements) {
+      const movDate = new Date(mov.date);
+      const movQty = Number(mov.quantity);
+
+      // Movements on or after fromDate reversed from current quantity to calculate opening balance
+      if (fromDate && movDate >= fromDate) {
+        if (mov.type === "PRODUCTION_IN" || mov.type === "RETURN_IN") {
+          openingBalance -= movQty;
+        } else if (
+          mov.type === "SALE_OUT" ||
+          mov.type === "DEFECT" ||
+          mov.type === "BONUS" ||
+          mov.type === "PRODUCTION_CONSUME"
+        ) {
+          openingBalance += movQty;
+        } else if (mov.type === "ADJUSTMENT") {
+          openingBalance -= movQty;
+        }
+      }
+
+      // Check if movement falls within [fromDate, toDate]
+      const isInPeriod =
+        (!fromDate || movDate >= fromDate) && (!toDate || movDate <= toDate);
+
+      if (isInPeriod) {
+        if (mov.type === "PRODUCTION_IN") {
+          productionIn += movQty;
+        } else if (mov.type === "RETURN_IN") {
+          returnIn += movQty;
+        } else if (mov.type === "DEFECT") {
+          defect += movQty;
+        } else if (mov.type === "BONUS") {
+          bonus += movQty;
+        } else if (mov.type === "SALE_OUT") {
+          saleOut += movQty;
+        }
+      }
+    }
+
+    if (!fromDate) {
+      openingBalance = currentQty - (productionIn + returnIn - defect - bonus - saleOut);
+      if (openingBalance < 0) openingBalance = 0;
+    }
+
+    const closingBalance = openingBalance + productionIn + returnIn - defect - bonus - saleOut;
+    const minStock = Number(item.minStock);
+    const isLowStock = minStock > 0 && closingBalance <= minStock;
+
+    return {
+      id: item.id,
+      name: item.name,
+      unit: item.unit,
+      costPrice: Number(item.costPrice),
+      salePrice: item.salePrice ? Number(item.salePrice) : null,
+      minStock,
+      openingBalance,
+      productionIn,
+      returnIn,
+      defect,
+      bonus,
+      saleOut,
+      closingBalance,
+      isLowStock,
+    };
+  });
 }
 
 export async function getInventoryItem(id: string) {
@@ -51,6 +159,7 @@ export async function getInventoryItem(id: string) {
 
 export async function getAllItems() {
   return prisma.inventoryItem.findMany({
+    where: REAL_ITEMS_FILTER,
     orderBy: { name: "asc" },
   });
 }
@@ -290,6 +399,7 @@ export async function getLowStockItems() {
   const items = await prisma.inventoryItem.findMany({
     where: {
       minStock: { gt: 0 },
+      ...REAL_ITEMS_FILTER,
     },
     orderBy: { name: "asc" },
   });

@@ -3,6 +3,28 @@
 import { prisma } from "@/lib/db";
 import { ClientSchema } from "@/lib/validations";
 import { revalidatePath } from "next/cache";
+import { Prisma } from "@prisma/client";
+
+const OPENING_BALANCE_ITEM_NAME = "__OPENING_BALANCE__";
+
+async function getOrCreateOpeningBalanceItem(tx: Prisma.TransactionClient) {
+  let item = await tx.inventoryItem.findUnique({ where: { name: OPENING_BALANCE_ITEM_NAME } });
+  if (!item) {
+    item = await tx.inventoryItem.create({
+      data: {
+        name: OPENING_BALANCE_ITEM_NAME,
+        category: "FINISHED_GOOD",
+        unit: "шт",
+        quantity: 0,
+        costPrice: 0,
+        salePrice: 0,
+        minStock: 0,
+        isSystem: true,
+      },
+    });
+  }
+  return item;
+}
 
 export async function getClients() {
   return prisma.client.findMany({
@@ -23,8 +45,44 @@ export async function createClient(data: unknown) {
       name: parsed.name,
       phone: parsed.phone || null,
       address: parsed.address || null,
+      district: parsed.district || null,
+      visitFrequency: parsed.visitFrequency != null && !isNaN(Number(parsed.visitFrequency)) && Number(parsed.visitFrequency) > 0
+        ? Number(parsed.visitFrequency)
+        : null,
     },
   });
+
+  // Create opening balance (debt) if provided, without touching inventory
+  const openingDebt = parsed.openingDebt != null ? Number(parsed.openingDebt) : 0;
+  if (openingDebt > 0) {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const placeholderItem = await getOrCreateOpeningBalanceItem(tx);
+
+      const sale = await tx.sale.create({
+        data: {
+          date: new Date(),
+          type: "SALE",
+          clientId: client.id,
+          payment: new Prisma.Decimal(0),
+        },
+      });
+
+      await tx.saleItem.create({
+        data: {
+          saleId: sale.id,
+          productId: placeholderItem.id,
+          quantity: new Prisma.Decimal(1),
+          unitPrice: new Prisma.Decimal(openingDebt),
+          lineTotal: new Prisma.Decimal(openingDebt),
+          isFreebie: false,
+          freebieFor: "Начальный долг", // marker to identify opening balance items
+        },
+      });
+      // No StockMovement, no InventoryItem.quantity update — intentional.
+      // No FinanceEntry because no cash was received (debt only).
+    });
+  }
+
   revalidatePath("/debts");
   revalidatePath("/sales");
   return client;
@@ -38,6 +96,10 @@ export async function updateClient(id: string, data: unknown) {
       name: parsed.name,
       phone: parsed.phone || null,
       address: parsed.address || null,
+      district: parsed.district || null,
+      visitFrequency: parsed.visitFrequency != null && !isNaN(Number(parsed.visitFrequency)) && Number(parsed.visitFrequency) > 0
+        ? Number(parsed.visitFrequency)
+        : null,
     },
   });
   revalidatePath("/debts");
@@ -56,6 +118,8 @@ export async function getClientsWithDebt() {
       name: true,
       phone: true,
       address: true,
+      district: true,
+      visitFrequency: true,
     },
   });
 

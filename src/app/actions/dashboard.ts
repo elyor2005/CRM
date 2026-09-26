@@ -2,6 +2,8 @@
 
 import { prisma } from "@/lib/db";
 
+const OPENING_BALANCE_ITEM_NAME = "__OPENING_BALANCE__";
+
 /**
  * Get all dashboard data in a single parallel call for maximum performance.
  */
@@ -11,7 +13,7 @@ export async function getDashboardData() {
   const endOfDay = new Date(startOfDay);
   endOfDay.setDate(endOfDay.getDate() + 1);
 
-  // Single parallel batch for all 12 independent database queries (1 round-trip wave)
+  // Single parallel batch for all independent database queries
   const [
     todaySales,
     todayFinance,
@@ -25,6 +27,7 @@ export async function getDashboardData() {
     recentPayments,
     recentExpenses,
     recentMovements,
+    liabilitiesTotal,
   ] = await Promise.all([
     prisma.sale.findMany({
       where: { date: { gte: startOfDay, lt: endOfDay }, type: "SALE" },
@@ -44,7 +47,12 @@ export async function getDashboardData() {
       where: { type: "EXPENSE" },
       _sum: { amount: true },
     }),
-    prisma.inventoryItem.findMany(),
+    prisma.inventoryItem.findMany({
+      where: {
+        isSystem: false,
+        NOT: { name: OPENING_BALANCE_ITEM_NAME },
+      },
+    }),
     prisma.client.findMany({
       include: {
         sales: { include: { items: true } },
@@ -75,6 +83,9 @@ export async function getDashboardData() {
       orderBy: { date: "desc" },
       take: 5,
     }),
+    prisma.liabilityEntry.aggregate({
+      _sum: { amount: true },
+    }),
   ]);
 
   // Today Calculations
@@ -103,9 +114,12 @@ export async function getDashboardData() {
   const cashBalance =
     Number(allIncome._sum.amount || 0) - Number(allExpense._sum.amount || 0);
 
-  let warehouseValue = 0;
+  // Finished goods value at SALE PRICE (Task 1c — renamed card)
+  let finishedGoodsSaleValue = 0;
   for (const item of allItems) {
-    warehouseValue += Number(item.quantity) * Number(item.costPrice);
+    if (item.category === "FINISHED_GOOD" && item.name !== OPENING_BALANCE_ITEM_NAME) {
+      finishedGoodsSaleValue += Number(item.quantity) * Number(item.salePrice || 0);
+    }
   }
 
   let totalReceivables = 0;
@@ -151,9 +165,16 @@ export async function getDashboardData() {
   const totalExpenses = Number(allExpense._sum.amount || 0);
   const netProfit = grossProfit - totalExpenses;
 
+  // Liabilities total (Task 1c)
+  const liabTotal = Number(liabilitiesTotal._sum.amount || 0);
+
+  // Today's total payments (sale-time + standalone) — for the "Оплата" card (Task 1c)
+  const todayTotalPayments =
+    todayFinance.filter(e => e.type === "INCOME").reduce((sum, e) => sum + Number(e.amount), 0);
+
   // Alerts
   const lowStockItems = allItems.filter(
-    (item) => Number(item.minStock) > 0 && Number(item.quantity) < Number(item.minStock)
+    (item) => item.name !== OPENING_BALANCE_ITEM_NAME && Number(item.minStock) > 0 && Number(item.quantity) < Number(item.minStock)
   );
 
   const debtClients: { id: string; name: string; debt: number }[] = [];
@@ -180,17 +201,64 @@ export async function getDashboardData() {
   }
   debtClients.sort((a, b) => b.debt - a.debt);
 
+  // Overdue visit clients (Task 7)
+  const overdueVisitClients: { id: string; name: string; daysOverdue: number }[] = [];
+  for (const client of allClients) {
+    if (!client.visitFrequency || client.visitFrequency <= 0) continue;
+
+    // Find last REAL sale (exclude opening balance placeholders)
+    let lastRealSaleDate: Date | null = null;
+    for (const sale of client.sales) {
+      if (sale.type !== "SALE") continue;
+      // Check if this is an opening balance sale
+      const isOpeningBalance = sale.items.some(
+        (item) => item.freebieFor === "Начальный долг"
+      );
+      if (isOpeningBalance) continue;
+      if (!lastRealSaleDate || sale.date > lastRealSaleDate) {
+        lastRealSaleDate = sale.date;
+      }
+    }
+
+    if (!lastRealSaleDate) {
+      // Client has frequency set but no real sales — consider overdue since creation
+      const daysSince = Math.floor((now.getTime() - new Date(client.createdAt).getTime()) / (1000 * 60 * 60 * 24));
+      if (daysSince > client.visitFrequency) {
+        overdueVisitClients.push({
+          id: client.id,
+          name: client.name,
+          daysOverdue: daysSince - client.visitFrequency,
+        });
+      }
+      continue;
+    }
+
+    const daysSinceLastSale = Math.floor(
+      (now.getTime() - lastRealSaleDate.getTime()) / (1000 * 60 * 60 * 24)
+    );
+    if (daysSinceLastSale > client.visitFrequency) {
+      overdueVisitClients.push({
+        id: client.id,
+        name: client.name,
+        daysOverdue: daysSinceLastSale - client.visitFrequency,
+      });
+    }
+  }
+  overdueVisitClients.sort((a, b) => b.daysOverdue - a.daysOverdue);
+
   return {
     today: {
       sales: todaySalesTotal,
       cashReceived: todayCashReceived,
       newDebt: todayNewDebt,
       expenses: todayExpenses,
+      totalPayments: todayTotalPayments,
     },
     position: {
       totalReceivables,
-      warehouseValue,
+      finishedGoodsSaleValue,
       cashBalance,
+      liabilitiesTotal: liabTotal,
       totalSales: totalSalesAllTime,
       totalExpenses,
       grossProfit,
@@ -205,6 +273,7 @@ export async function getDashboardData() {
         unit: i.unit,
       })),
       debtClients,
+      overdueVisitClients,
     },
     recent: {
       sales: recentSales.map((s) => ({

@@ -117,7 +117,7 @@ export async function getFinanceSummary(options?: {
     }
   }
 
-  const [income, expense] = await Promise.all([
+  const [income, expense, expenseEntries] = await Promise.all([
     prisma.financeEntry.aggregate({
       where: { type: "INCOME", ...dateFilter },
       _sum: { amount: true },
@@ -126,11 +126,22 @@ export async function getFinanceSummary(options?: {
       where: { type: "EXPENSE", ...dateFilter },
       _sum: { amount: true },
     }),
+    prisma.financeEntry.findMany({
+      where: { type: "EXPENSE", ...dateFilter },
+      select: { category: true, amount: true },
+    }),
   ]);
+
+  const expenseByCategory: Record<string, number> = {};
+  for (const entry of expenseEntries) {
+    const cat = entry.category || "__UNCATEGORIZED__";
+    expenseByCategory[cat] = (expenseByCategory[cat] || 0) + Number(entry.amount);
+  }
 
   return {
     totalIncome: Number(income._sum.amount || 0),
     totalExpense: Number(expense._sum.amount || 0),
     balance: Number(income._sum.amount || 0) - Number(expense._sum.amount || 0),
+    expenseByCategory,
   };
 }

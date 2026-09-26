@@ -12,6 +12,8 @@ import {
   ClipboardList,
   LogOut,
   Building2,
+  CreditCard,
+  Settings,
 } from "lucide-react";
 import { ToastProvider } from "@/components/ui/Toast";
 import { useLanguage } from "@/lib/i18n/context";
@@ -32,15 +34,22 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const tabs = [
+  const mainTabs = [
     { href: "/dashboard", labelKey: "nav.dashboard", icon: LayoutDashboard },
     { href: "/sales", labelKey: "nav.sales", icon: ShoppingCart },
-    { href: "/debts", labelKey: "nav.debts", icon: Users },
+    { href: "/debts", labelKey: "nav.clients", icon: Users },
     { href: "/finance", labelKey: "nav.finance", icon: Wallet },
     { href: "/warehouse", labelKey: "nav.warehouse", icon: Package },
     { href: "/report", labelKey: "nav.report", icon: BarChart3 },
     { href: "/audit", labelKey: "nav.audit", icon: ClipboardList },
   ];
+
+  const bottomTabs = [
+    { href: "/liabilities", labelKey: "nav.liabilities", icon: CreditCard },
+    { href: "/settings", labelKey: "nav.settings", icon: Settings },
+  ];
+
+  const tabs = [...mainTabs, ...bottomTabs];
 
   return (
     <ToastProvider>
@@ -65,7 +74,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
             {/* Navigation Links */}
             <nav className="flex flex-col gap-1.5" aria-label="Main Navigation">
-              {tabs.map((tab) => {
+              {mainTabs.map((tab) => {
                 const isActive = pathname.startsWith(tab.href);
                 const Icon = tab.icon;
                 return (
@@ -83,6 +92,28 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   </Link>
                 );
               })}
+
+              {/* Bottom nav items (below audit, above footer) */}
+              <div className="border-t border-gray-100 dark:border-zinc-800/60 mt-2 pt-2">
+                {bottomTabs.map((tab) => {
+                  const isActive = pathname.startsWith(tab.href);
+                  const Icon = tab.icon;
+                  return (
+                    <Link
+                      key={tab.href}
+                      href={tab.href}
+                      className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-bold text-sm transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                        isActive
+                          ? "bg-indigo-600 text-white shadow-sm shadow-indigo-600/30"
+                          : "text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-[#1A202C] hover:text-gray-900 dark:hover:text-white"
+                      }`}
+                    >
+                      <Icon size={19} strokeWidth={isActive ? 2.2 : 1.8} />
+                      <span>{t(tab.labelKey)}</span>
+                    </Link>
+                  );
+                })}
+              </div>
             </nav>
           </div>
 
@@ -137,7 +168,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
         {/* ─── Mobile Bottom Tab Navigation Bar (< md) ─── */}
         <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-[#131823]/95 backdrop-blur-md border-t border-gray-200/80 dark:border-zinc-800/80 px-2 pt-2 pb-[calc(0.5rem+var(--sai-bottom))] flex justify-around items-center shadow-lg">
-          {tabs.map((tab) => {
+          {mainTabs.map((tab) => {
             const isActive = pathname.startsWith(tab.href);
             const Icon = tab.icon;
             return (

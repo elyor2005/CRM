@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useTransition } from "react";
-import { Plus, Wallet, Link as LinkIcon, Trash2 } from "lucide-react";
+import { Plus, Wallet, Link as LinkIcon, Trash2, Download } from "lucide-react";
 import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
@@ -23,6 +23,7 @@ import { Table, TableRow } from "@/components/ui/Table";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { TableRowSkeleton, CardSkeleton } from "@/components/ui/Skeleton";
 import { PAYMENT_METHODS, EXPENSE_CATEGORIES } from "@/lib/validations";
+import { exportToExcel } from "@/lib/exportExcel";
 import type { FinanceType } from "@prisma/client";
 
 type Entry = Awaited<ReturnType<typeof getFinanceEntries>>[number];
@@ -56,7 +57,12 @@ export default function FinancePage() {
   const [datePreset, setDatePreset] = useState<DatePreset>("ALL");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
-  const [summary, setSummary] = useState({ totalIncome: 0, totalExpense: 0, balance: 0 });
+  const [summary, setSummary] = useState<{
+    totalIncome: number;
+    totalExpense: number;
+    balance: number;
+    expenseByCategory?: Record<string, number>;
+  }>({ totalIncome: 0, totalExpense: 0, balance: 0, expenseByCategory: {} });
   const [sheetOpen, setSheetOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -142,25 +148,86 @@ export default function FinancePage() {
   }
   runningBalances.reverse();
 
+  // Categories with activity sorted by amount descending, uncategorized at end
+  const expenseCategoriesList = Object.entries(summary.expenseByCategory || {})
+    .filter(([, amount]) => amount > 0)
+    .sort(([catA, amtA], [catB, amtB]) => {
+      if (catA === "__UNCATEGORIZED__") return 1;
+      if (catB === "__UNCATEGORIZED__") return -1;
+      return amtB - amtA;
+    });
+
+  const handleExportExcel = () => {
+    const headers = [
+      t("common.date"),
+      t("common.type"),
+      t("common.description"),
+      t("common.category"),
+      t("common.method"),
+      `${t("common.amount")} (${t("common.sum")})`,
+      `${t("finance.runningBalance")} (${t("common.sum")})`,
+    ];
+
+    const rows = entries.map((entry, idx) => [
+      formatDateShort(entry.date, language),
+      entry.type === "INCOME" ? t("finance.income") : t("finance.expense"),
+      entry.description + (entry.relatedClient ? ` (${entry.relatedClient.name})` : ""),
+      entry.category
+        ? t(`expenseCategories.${entry.category}`, entry.category)
+        : entry.type === "EXPENSE"
+        ? t("common.noCategory")
+        : "",
+      entry.paymentMethod ? t(`paymentMethods.${entry.paymentMethod}`) : "",
+      entry.type === "INCOME" ? Number(entry.amount) : -Number(entry.amount),
+      runningBalances[idx] || 0,
+    ]);
+
+    const summaryRows = [
+      [],
+      [t("common.total"), "", "", "", "", "", ""],
+      [t("finance.totalIncome"), Number(summary.totalIncome)],
+      [t("finance.totalExpense"), Number(summary.totalExpense)],
+      [t("finance.balance"), Number(summary.balance)],
+    ];
+
+    exportToExcel(`Финансы_${formatDateInput(new Date())}`, [
+      {
+        name: "Финансы",
+        data: [headers, ...rows, ...summaryRows],
+      },
+    ]);
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
         title={t("finance.title")}
         action={
-          <Button
-            onClick={() => {
-              setFormType("EXPENSE");
-              setFormDesc("");
-              setFormAmount("");
-              setFormDate(formatDateInput(new Date()));
-              setFormCategory("");
-              setFormMethod("CASH");
-              setSheetOpen(true);
-            }}
-            size="md"
-          >
-            <Plus size={18} /> {t("finance.newEntry")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="md"
+              onClick={handleExportExcel}
+              disabled={entries.length === 0}
+            >
+              <Download size={16} />
+              <span className="hidden sm:inline">{t("common.exportExcel")}</span>
+            </Button>
+            <Button
+              onClick={() => {
+                setFormType("EXPENSE");
+                setFormDesc("");
+                setFormAmount("");
+                setFormDate(formatDateInput(new Date()));
+                setFormCategory("");
+                setFormMethod("CASH");
+                setSheetOpen(true);
+              }}
+              size="md"
+            >
+              <Plus size={18} /> {t("finance.newEntry")}
+            </Button>
+          </div>
         }
       />
 
@@ -225,6 +292,27 @@ export default function FinancePage() {
             onChange={(e) => setCustomTo(e.target.value)}
           />
         </div>
+      )}
+
+      {/* Task Group 4: Расходы по категориям breakdown */}
+      {filter !== "INCOME" && expenseCategoriesList.length > 0 && (
+        <section className="space-y-2.5">
+          <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400 px-1">
+            {language === "ru" ? "Расходы по категориям" : language === "uz" ? "Kategoriyalar bo'yicha xarajatlar" : "Expenses by Category"}
+          </h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5">
+            {expenseCategoriesList.map(([cat, amount]) => (
+              <Card key={cat} className="p-3 bg-white dark:bg-[#131823] border border-gray-200/80 dark:border-zinc-800">
+                <div className="text-[11px] font-bold text-gray-500 dark:text-zinc-400 truncate mb-1" title={cat === "__UNCATEGORIZED__" ? t("common.noCategory") : t(`expenseCategories.${cat}`, cat)}>
+                  {cat === "__UNCATEGORIZED__" ? t("common.noCategory") : t(`expenseCategories.${cat}`, cat)}
+                </div>
+                <div className="text-sm font-extrabold text-rose-600 dark:text-rose-400 tabular-nums">
+                  {formatUZS(amount)} <span className="text-[10px] font-normal text-gray-400">{t("common.sum")}</span>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </section>
       )}
 
       {/* Finance Records Table */}
@@ -309,25 +397,30 @@ export default function FinancePage() {
         </Table>
       )}
 
-      {/* New Entry Modal */}
+      {/* Add Finance Entry Modal Sheet */}
       <ModalSheet
         open={sheetOpen}
         onClose={() => setSheetOpen(false)}
         title={t("finance.newEntry")}
       >
         <div className="flex flex-col gap-4">
-          <SegmentedControl
-            value={formType}
-            onChange={(v) => setFormType(v as FinanceType)}
-            options={[
-              { value: "EXPENSE", label: t("finance.expense") },
-              { value: "INCOME", label: t("finance.income") },
-            ]}
-          />
+          <div className="w-full">
+            <SegmentedControl
+              value={formType}
+              onChange={(v) => {
+                setFormType(v as FinanceType);
+                if (v === "INCOME") setFormCategory("");
+              }}
+              options={[
+                { value: "EXPENSE", label: t("finance.expense") },
+                { value: "INCOME", label: t("finance.income") },
+              ]}
+            />
+          </div>
 
           <Input
             label={t("common.description")}
-            placeholder={formType === "EXPENSE" ? "Аренда офиса" : "Оплата"}
+            placeholder={`${t("common.description")}...`}
             value={formDesc}
             onChange={(e) => setFormDesc(e.target.value)}
             autoFocus
@@ -351,7 +444,7 @@ export default function FinancePage() {
           />
 
           {formType === "EXPENSE" && (
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-1.5 w-full">
               <label className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-zinc-400 pl-0.5">
                 {t("common.category")}
               </label>
@@ -360,7 +453,7 @@ export default function FinancePage() {
                 value={formCategory}
                 onChange={(e) => setFormCategory(e.target.value)}
               >
-                <option value="">-- {t("common.select")} --</option>
+                <option value="">{t("common.select")}...</option>
                 {EXPENSE_CATEGORIES.map((cat) => (
                   <option key={cat} value={cat}>
                     {t(`expenseCategories.${cat}`)}
@@ -370,7 +463,7 @@ export default function FinancePage() {
             </div>
           )}
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-1.5 w-full">
             <label className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-zinc-400 pl-0.5">
               {t("common.method")}
             </label>
@@ -395,16 +488,17 @@ export default function FinancePage() {
             disabled={!formDesc.trim() || !formAmount || Number(formAmount) <= 0}
             loading={isPending}
           >
-            {t("common.save")}
+            {t("common.add")}
           </Button>
         </div>
       </ModalSheet>
 
-      {/* Delete confirm */}
+      {/* Delete confirmation dialog */}
       <ConfirmDialog
         open={!!deleteId}
         title={t("common.delete")}
         message={t("common.confirmDelete")}
+        confirmLabel={t("common.delete")}
         destructive
         onConfirm={handleDelete}
         onCancel={() => setDeleteId(null)}

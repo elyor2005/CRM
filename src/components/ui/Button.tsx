@@ -3,7 +3,7 @@
 import React from "react";
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "primary" | "secondary" | "destructive" | "ghost";
+  variant?: "primary" | "secondary" | "destructive" | "ghost" | "outline";
   size?: "sm" | "md" | "lg";
   loading?: boolean;
   children: React.ReactNode;
@@ -26,6 +26,8 @@ export function Button({
       "bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white shadow-xs dark:bg-indigo-600 dark:hover:bg-indigo-500",
     secondary:
       "bg-gray-100 hover:bg-gray-200/80 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-gray-900 dark:text-white border border-gray-200/60 dark:border-zinc-700/60",
+    outline:
+      "bg-transparent hover:bg-gray-100 dark:hover:bg-zinc-800/80 text-gray-700 dark:text-zinc-200 border border-gray-200/80 dark:border-zinc-700 shadow-xs",
     destructive:
       "bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 border border-rose-200/50 dark:border-rose-900/40",
     ghost:

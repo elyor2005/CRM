@@ -36,7 +36,11 @@ export async function getSale(id: string) {
 
 export async function getProducts() {
   return prisma.inventoryItem.findMany({
-    where: { category: "FINISHED_GOOD" },
+    where: {
+      category: "FINISHED_GOOD",
+      isSystem: false,
+      NOT: { name: "__OPENING_BALANCE__" },
+    },
     orderBy: { name: "asc" },
   });
 }

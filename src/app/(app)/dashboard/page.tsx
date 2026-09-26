@@ -12,6 +12,9 @@ import {
   Users,
   ArrowRight,
   DollarSign,
+  CreditCard,
+  Clock,
+  Banknote,
 } from "lucide-react";
 import { formatUZS, formatDateShort } from "@/lib/format";
 import { getDashboardData } from "@/app/actions/dashboard";
@@ -90,12 +93,15 @@ export default function DashboardPage() {
         </div>
       </section>
 
+      {/* ─── Divider ─── */}
+      <div className="border-t border-gray-200/60 dark:border-zinc-800/40" />
+
       {/* ─── Current Financial Position ─── */}
       <section className="space-y-3">
         <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400 px-1">
           {t("dashboard.currentPosition")}
         </h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-3.5">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
           <StatCard
             label={t("dashboard.totalReceivables")}
             value={formatUZS(data.position.totalReceivables)}
@@ -105,10 +111,17 @@ export default function DashboardPage() {
           />
           <StatCard
             label={t("dashboard.warehouseValue")}
-            value={formatUZS(data.position.warehouseValue)}
+            value={formatUZS(data.position.finishedGoodsSaleValue)}
             icon={<Package size={18} />}
             theme="indigo"
             onClick={() => router.push("/warehouse")}
+          />
+          <StatCard
+            label={t("dashboard.liabilitiesTotal")}
+            value={formatUZS(data.position.liabilitiesTotal)}
+            icon={<CreditCard size={18} />}
+            theme="rose"
+            onClick={() => router.push("/liabilities")}
           />
           <StatCard
             label={t("dashboard.cashBalance")}
@@ -117,11 +130,30 @@ export default function DashboardPage() {
             theme="emerald"
             onClick={() => router.push("/finance")}
           />
+        </div>
+      </section>
+
+      {/* ─── Divider ─── */}
+      <div className="border-t border-gray-200/60 dark:border-zinc-800/40" />
+
+      {/* ─── Bottom Summary Row ─── */}
+      <section className="space-y-3">
+        <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400 px-1">
+          {t("dashboard.summaryRow")}
+        </h3>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3.5">
           <StatCard
             label={t("dashboard.totalSales")}
             value={formatUZS(data.position.totalSales)}
             icon={<ShoppingCart size={18} />}
             theme="indigo"
+          />
+          <StatCard
+            label={t("dashboard.payment")}
+            value={formatUZS(data.today.totalPayments)}
+            icon={<Banknote size={18} />}
+            theme="emerald"
+            onClick={() => router.push("/debts")}
           />
           <StatCard
             label={t("dashboard.totalExpenses")}
@@ -139,13 +171,13 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* ─── Low Stock & Debt Alerts ─── */}
-      {(data.alerts.lowStockItems.length > 0 || data.alerts.debtClients.length > 0) && (
+      {/* ─── Alerts ─── */}
+      {(data.alerts.lowStockItems.length > 0 || data.alerts.debtClients.length > 0 || data.alerts.overdueVisitClients.length > 0) && (
         <section className="space-y-3">
           <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400 px-1">
             {t("dashboard.alerts")}
           </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {data.alerts.lowStockItems.length > 0 && (
               <Card className="p-0 overflow-hidden border-amber-200/80 dark:border-amber-900/40">
                 <div className="flex items-center justify-between p-3.5 bg-amber-50/80 dark:bg-amber-950/30 border-b border-amber-200/60 dark:border-amber-900/40">
@@ -206,6 +238,41 @@ export default function DashboardPage() {
                     >
                       <span className="font-semibold text-gray-900 dark:text-white">{client.name}</span>
                       <span className="text-orange-600 dark:text-orange-400 font-bold tabular-nums">{formatUZS(client.debt)}</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* Overdue Visit Clients (Task 7) */}
+            {data.alerts.overdueVisitClients.length > 0 && (
+              <Card className="p-0 overflow-hidden border-violet-200/80 dark:border-violet-900/40">
+                <div className="flex items-center justify-between p-3.5 bg-violet-50/80 dark:bg-violet-950/30 border-b border-violet-200/60 dark:border-violet-900/40">
+                  <div className="flex items-center gap-2">
+                    <Clock size={17} className="text-violet-600 dark:text-violet-400" />
+                    <span className="text-sm font-bold text-violet-900 dark:text-violet-300">
+                      {t("dashboard.overdueVisits")} ({data.alerts.overdueVisitClients.length})
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => router.push("/debts")}
+                    className="text-xs font-bold text-violet-700 dark:text-violet-400 hover:underline flex items-center gap-1"
+                  >
+                    <span>{t("common.all")}</span>
+                    <ArrowRight size={12} />
+                  </button>
+                </div>
+                <div className="divide-y divide-gray-100 dark:divide-zinc-800/60">
+                  {data.alerts.overdueVisitClients.slice(0, 5).map((client) => (
+                    <div
+                      key={client.id}
+                      className="flex items-center justify-between p-3 text-sm cursor-pointer hover:bg-violet-50/40 dark:hover:bg-violet-950/10 transition-colors"
+                      onClick={() => router.push(`/debts/${client.id}`)}
+                    >
+                      <span className="font-semibold text-gray-900 dark:text-white">{client.name}</span>
+                      <span className="text-violet-600 dark:text-violet-400 font-bold tabular-nums">
+                        +{client.daysOverdue} {t("dashboard.daysOverdue")}
+                      </span>
                     </div>
                   ))}
                 </div>

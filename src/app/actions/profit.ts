@@ -3,11 +3,13 @@
 import { prisma } from "@/lib/db";
 
 /**
- * Get profit/performance report.
- * - Total Sales = sum of all SALE line totals
- * - COGS = sum of (sale quantity × costPrice at time of sale)
- * - Gross Profit = Total Sales - COGS
- * - Operating Expenses = sum of EXPENSE finance entries
+ * Get profit/performance report (Task Group 8b, 8c, 8d).
+ * - Gross Sales = sum of all SALE line totals
+ * - Returns = sum of all RETURN line totals
+ * - Net Sales = Gross Sales - Returns
+ * - COGS = sum of (sale quantity × costPrice) - sum of (return quantity × costPrice)
+ * - Gross Profit = Net Sales - COGS
+ * - Operating Expenses = sum of EXPENSE finance entries grouped by category
  * - Net Profit = Gross Profit - Operating Expenses
  */
 export async function getProfitReport(options?: {
@@ -50,17 +52,17 @@ export async function getProfitReport(options?: {
     }),
   ]);
 
-  let totalSales = 0;
+  let grossSales = 0;
   let totalCOGS = 0;
 
   for (const sale of sales) {
     for (const item of sale.items) {
-      totalSales += Number(item.lineTotal);
+      grossSales += Number(item.lineTotal);
       totalCOGS += Number(item.quantity) * Number(item.product.costPrice);
     }
   }
 
-  // Subtract returns
+  // Returns
   let totalReturns = 0;
   let returnsCOGS = 0;
   for (const ret of returns) {
@@ -70,7 +72,7 @@ export async function getProfitReport(options?: {
     }
   }
 
-  const netSales = totalSales - totalReturns;
+  const netSales = grossSales - totalReturns;
   const netCOGS = totalCOGS - returnsCOGS;
   const grossProfit = netSales - netCOGS;
 
@@ -80,7 +82,7 @@ export async function getProfitReport(options?: {
   for (const expense of expenses) {
     const amount = Number(expense.amount);
     totalExpenses += amount;
-    const cat = expense.category || "OTHER";
+    const cat = expense.category || "__UNCATEGORIZED__";
     expenseByCategory[cat] = (expenseByCategory[cat] || 0) + amount;
   }
 
@@ -89,7 +91,9 @@ export async function getProfitReport(options?: {
   const netMargin = netSales > 0 ? (netProfit / netSales) * 100 : 0;
 
   return {
+    grossSales,
     totalSales: netSales,
+    netSales,
     totalReturns,
     cogs: netCOGS,
     grossProfit,

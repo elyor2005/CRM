@@ -42,6 +42,9 @@ export const ClientSchema = z.object({
   name: z.string().min(1, "Введите имя клиента").max(200),
   phone: z.string().max(50).optional().or(z.literal("")),
   address: z.string().max(500).optional().or(z.literal("")),
+  district: z.string().max(200).optional().or(z.literal("")),
+  visitFrequency: z.union([z.number(), z.string().transform(v => v === "" ? undefined : Number(v))]).optional(),
+  openingDebt: z.union([z.number(), z.string().transform(v => v === "" ? undefined : Number(v))]).optional(),
 });
 
 export type ClientInput = z.infer<typeof ClientSchema>;

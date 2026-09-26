@@ -3,7 +3,7 @@
 import React from "react";
 
 interface TableProps {
-  headers: string[];
+  headers: React.ReactNode[];
   children: React.ReactNode;
   alignments?: ("left" | "right" | "center")[];
   className?: string;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useTransition } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Download } from "lucide-react";
 import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
@@ -19,15 +19,49 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { CardSkeleton } from "@/components/ui/Skeleton";
+import { exportToExcel } from "@/lib/exportExcel";
 
 type ReportData = Awaited<ReturnType<typeof getBalanceReport>>;
 type ProfitData = Awaited<ReturnType<typeof getProfitReport>>;
+type ProfitDatePreset = "WEEK" | "MONTH" | "CUSTOM";
+
+function getProfitDateRange(preset: ProfitDatePreset): { from: string; to: string } {
+  const now = new Date();
+  const today = formatDateInput(now);
+  switch (preset) {
+    case "WEEK": {
+      const weekAgo = new Date(now);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      return { from: formatDateInput(weekAgo), to: today };
+    }
+    case "MONTH": {
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { from: formatDateInput(monthStart), to: today };
+    }
+    default: {
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { from: formatDateInput(monthStart), to: today };
+    }
+  }
+}
 
 export default function ReportPage() {
   const { language, t } = useLanguage();
   const [tab, setTab] = useState<"BALANCE" | "PROFIT">("BALANCE");
   const [report, setReport] = useState<ReportData | null>(null);
   const [profit, setProfit] = useState<ProfitData | null>(null);
+
+  // 8a: Historical date for balance report
+  const [balanceDate, setBalanceDate] = useState(formatDateInput(new Date()));
+
+  // 8b: Profit report period range picker (default this month)
+  const [profitDatePreset, setProfitDatePreset] = useState<ProfitDatePreset>("MONTH");
+  const [profitCustomFrom, setProfitCustomFrom] = useState("");
+  const [profitCustomTo, setProfitCustomTo] = useState("");
+
+  // 8d: Expense categories include/exclude toggles (live client-side recalculation)
+  const [excludedCategories, setExcludedCategories] = useState<Set<string>>(new Set());
+
   const [sheetOpen, setSheetOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -41,9 +75,17 @@ export default function ReportPage() {
 
   const loadData = () => {
     startTransition(async () => {
+      const pRange =
+        profitDatePreset === "CUSTOM"
+          ? {
+              from: profitCustomFrom || formatDateInput(new Date()),
+              to: profitCustomTo || formatDateInput(new Date()),
+            }
+          : getProfitDateRange(profitDatePreset);
+
       const [r, p] = await Promise.all([
-        getBalanceReport(),
-        getProfitReport(),
+        getBalanceReport({ asOfDate: balanceDate || undefined }),
+        getProfitReport({ dateFrom: pRange.from, dateTo: pRange.to }),
       ]);
       setReport(r);
       setProfit(p);
@@ -53,7 +95,16 @@ export default function ReportPage() {
 
   useEffect(() => {
     loadData();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [balanceDate, profitDatePreset, profitCustomFrom, profitCustomTo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggleCategory = (cat: string) => {
+    setExcludedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  };
 
   const handleSubmit = () => {
     if (!formName.trim() || !formAmount || Number(formAmount) <= 0) return;
@@ -89,6 +140,88 @@ export default function ReportPage() {
     });
   };
 
+  // Live recalculated operating expenses and net profit (8d)
+  const includedExpenses = profit
+    ? Object.entries(profit.expenseByCategory).reduce((sum, [cat, amt]) => {
+        if (!excludedCategories.has(cat)) return sum + amt;
+        return sum;
+      }, 0)
+    : 0;
+
+  const liveNetProfit = profit ? profit.grossProfit - includedExpenses : 0;
+  const liveNetMargin =
+    profit && profit.netSales > 0
+      ? Math.round((liveNetProfit / profit.netSales) * 1000) / 10
+      : 0;
+
+  const handleExportExcel = () => {
+    if (tab === "BALANCE" && report) {
+      const debitRows = [
+        [t("report.debitSide"), ""],
+        [t("warehouse.finishedGoods"), report.debit.finishedGoods],
+        [t("warehouse.rawMaterials"), report.debit.rawMaterials],
+        [t("warehouse.packaging"), report.debit.packaging],
+        [t("report.cashBalance"), report.debit.cash],
+        [t("report.receivables"), report.debit.receivables],
+        [t("common.total") + " (" + t("report.debitSide") + ")", report.debit.total],
+      ];
+
+      const creditRows = [
+        [],
+        [t("report.creditSide"), ""],
+        ...report.credit.liabilities.map((l) => [
+          `${l.name} (${formatDateShort(l.date, language)})`,
+          Number(l.amount),
+        ]),
+        [t("common.total") + " (" + t("report.creditSide") + ")", report.credit.total],
+      ];
+
+      const summaryRows = [
+        [],
+        [t("report.netBalance"), report.netBalance],
+      ];
+
+      exportToExcel(`Отчёт_Баланс_${balanceDate}`, [
+        {
+          name: "Баланс",
+          data: [
+            [`Баланс на дату: ${balanceDate}`],
+            [],
+            ...debitRows,
+            ...creditRows,
+            ...summaryRows,
+          ],
+        },
+      ]);
+    } else if (tab === "PROFIT" && profit) {
+      const pnlRows = [
+        [t("report.totalSales") + " (Net)", profit.netSales],
+        [t("report.cogs"), profit.cogs],
+        [t("report.grossProfit"), profit.grossProfit],
+        [t("report.operatingExpenses"), includedExpenses],
+        [t("report.netProfit"), liveNetProfit],
+        [t("report.netMargin"), `${liveNetMargin}%`],
+      ];
+
+      const expenseRows = [
+        [],
+        ["Операционные расходы по категориям", "Сумма", "Включено в расчет"],
+        ...Object.entries(profit.expenseByCategory).map(([cat, amt]) => [
+          cat === "__UNCATEGORIZED__" ? t("common.noCategory") : t(`expenseCategories.${cat}`, cat),
+          amt,
+          excludedCategories.has(cat) ? "Нет" : "Да",
+        ]),
+      ];
+
+      exportToExcel(`Отчёт_Прибыль_${formatDateInput(new Date())}`, [
+        {
+          name: "Отчёт о прибыли",
+          data: [["Показатель", "Значение"], ...pnlRows, ...expenseRows],
+        },
+      ]);
+    }
+  };
+
   if (loading || !report || !profit) {
     return (
       <div className="space-y-6">
@@ -103,7 +236,62 @@ export default function ReportPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title={t("report.title")} />
+      <PageHeader
+        title={t("report.title")}
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            {tab === "BALANCE" ? (
+              /* 8a. Historical Balance Date Picker */
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-gray-500 dark:text-zinc-400">
+                  {language === "ru" ? "На дату:" : language === "uz" ? "Sana bo'yicha:" : "As of:"}
+                </span>
+                <input
+                  type="date"
+                  value={balanceDate}
+                  onChange={(e) => setBalanceDate(e.target.value)}
+                  className="px-3 py-1.5 bg-gray-100 dark:bg-[#1E2638] text-gray-900 dark:text-white rounded-xl text-xs font-bold border border-gray-200/60 dark:border-zinc-800 outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            ) : (
+              /* 8b. Profit Report Period Range Picker */
+              <div className="flex flex-wrap items-center gap-2">
+                <SegmentedControl
+                  value={profitDatePreset}
+                  onChange={(v) => setProfitDatePreset(v as ProfitDatePreset)}
+                  options={[
+                    { value: "WEEK", label: t("common.thisWeek") },
+                    { value: "MONTH", label: t("common.thisMonth") },
+                    { value: "CUSTOM", label: t("common.custom") },
+                  ]}
+                />
+                {profitDatePreset === "CUSTOM" && (
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="date"
+                      value={profitCustomFrom}
+                      onChange={(e) => setProfitCustomFrom(e.target.value)}
+                      className="px-2.5 py-1.5 bg-gray-100 dark:bg-[#1E2638] text-gray-900 dark:text-white rounded-xl text-xs font-bold border border-gray-200/60 dark:border-zinc-800 outline-none"
+                    />
+                    <span className="text-xs text-gray-400">—</span>
+                    <input
+                      type="date"
+                      value={profitCustomTo}
+                      onChange={(e) => setProfitCustomTo(e.target.value)}
+                      className="px-2.5 py-1.5 bg-gray-100 dark:bg-[#1E2638] text-gray-900 dark:text-white rounded-xl text-xs font-bold border border-gray-200/60 dark:border-zinc-800 outline-none"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            <Button variant="outline" size="md" onClick={handleExportExcel}>
+              <Download size={16} />
+              <span className="hidden sm:inline">{t("common.exportExcel")}</span>
+            </Button>
+          </div>
+        }
+      />
 
       {/* Tab switcher */}
       <div className="max-w-xs">
@@ -186,11 +374,10 @@ export default function ReportPage() {
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between px-1">
                 <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-900 dark:text-white">
-                  {t("report.creditSide")}
+                  {t("report.creditSide")} ({report.credit.liabilities.length})
                 </h3>
                 <Button
-                  type="button"
-                  variant="secondary"
+                  variant="outline"
                   size="sm"
                   onClick={() => {
                     setFormName("");
@@ -235,12 +422,12 @@ export default function ReportPage() {
           </div>
         </>
       ) : (
-        /* ─── PROFIT REPORT TAB ─── */
+        /* ─── PROFIT REPORT TAB (Task 8b, 8c, 8d) ─── */
         <>
-          {/* Net Profit Card */}
+          {/* Net Profit Card (Live updated) */}
           <Card
             className={`p-6 text-center border-2 ${
-              profit.netProfit >= 0
+              liveNetProfit >= 0
                 ? "bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-200/80 dark:border-emerald-900/40"
                 : "bg-rose-50/40 dark:bg-rose-950/20 border-rose-200/80 dark:border-rose-900/40"
             }`}
@@ -250,29 +437,27 @@ export default function ReportPage() {
             </span>
             <div
               className={`text-3xl sm:text-4xl font-extrabold tracking-tight tabular-nums my-1.5 ${
-                profit.netProfit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"
+                liveNetProfit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"
               }`}
             >
-              {formatUZS(profit.netProfit)}{" "}
+              {formatUZS(liveNetProfit)}{" "}
               <span className="text-sm font-normal text-gray-500 dark:text-zinc-400">{t("common.sum")}</span>
             </div>
             <div className="text-xs font-semibold text-gray-500 dark:text-zinc-400 tabular-nums">
-              {t("report.netMargin")}: {profit.netMargin}%
+              {t("report.netMargin")}: {liveNetMargin}%
             </div>
           </Card>
 
-          {/* P&L breakdown */}
+          {/* 8c. Fixed P&L breakdown (no duplicate subtraction of returns) */}
           <Card className="flex flex-col divide-y divide-gray-100 dark:divide-zinc-800/80 p-0 overflow-hidden">
             <div className="flex items-center justify-between p-4 text-sm">
-              <span className="text-gray-700 dark:text-zinc-300 font-semibold">{t("report.totalSales")}</span>
-              <span className="font-extrabold text-gray-900 dark:text-white text-base tabular-nums">{formatUZS(profit.totalSales)}</span>
+              <span className="text-gray-700 dark:text-zinc-300 font-semibold">
+                {t("report.totalSales")} {profit.totalReturns > 0 && <span className="text-xs font-normal text-gray-500">({language === "ru" ? "чистый объём" : language === "uz" ? "sof tushum" : "net"})</span>}
+              </span>
+              <span className="font-extrabold text-gray-900 dark:text-white text-base tabular-nums">
+                {formatUZS(profit.netSales)}
+              </span>
             </div>
-            {profit.totalReturns > 0 && (
-              <div className="flex items-center justify-between p-4 text-sm">
-                <span className="text-gray-500 dark:text-zinc-400 font-medium pl-4">− {t("report.returns")}</span>
-                <span className="font-bold text-rose-500 tabular-nums">{formatUZS(profit.totalReturns)}</span>
-              </div>
-            )}
             <div className="flex items-center justify-between p-4 text-sm">
               <span className="text-gray-700 dark:text-zinc-300 font-semibold">− {t("report.cogs")}</span>
               <span className="font-bold text-rose-600 dark:text-rose-400 tabular-nums">{formatUZS(profit.cogs)}</span>
@@ -287,34 +472,62 @@ export default function ReportPage() {
               </div>
             </div>
             <div className="flex items-center justify-between p-4 text-sm">
-              <span className="text-gray-700 dark:text-zinc-300 font-semibold">− {t("report.operatingExpenses")}</span>
-              <span className="font-bold text-rose-600 dark:text-rose-400 tabular-nums">{formatUZS(profit.operatingExpenses)}</span>
+              <span className="text-gray-700 dark:text-zinc-300 font-semibold">
+                − {t("report.operatingExpenses")} {excludedCategories.size > 0 && <span className="text-xs text-amber-600 dark:text-amber-400 font-normal">({language === "ru" ? "с фильтром" : "filtered"})</span>}
+              </span>
+              <span className="font-bold text-rose-600 dark:text-rose-400 tabular-nums">{formatUZS(includedExpenses)}</span>
             </div>
-            <div className={`flex items-center justify-between p-4 text-base font-extrabold ${profit.netProfit >= 0 ? "bg-emerald-50/50 dark:bg-emerald-950/20" : "bg-rose-50/50 dark:bg-rose-950/20"}`}>
+            <div className={`flex items-center justify-between p-4 text-base font-extrabold ${liveNetProfit >= 0 ? "bg-emerald-50/50 dark:bg-emerald-950/20" : "bg-rose-50/50 dark:bg-rose-950/20"}`}>
               <span>{t("report.netProfit")}</span>
-              <span className={`tabular-nums ${profit.netProfit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
-                {formatUZS(profit.netProfit)} {t("common.sum")}
+              <span className={`tabular-nums ${liveNetProfit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+                {formatUZS(liveNetProfit)} {t("common.sum")}
               </span>
             </div>
           </Card>
 
-          {/* Expense breakdown by category */}
+          {/* 8d. Expanded Expense Categories with Include/Exclude Toggles */}
           {Object.keys(profit.expenseByCategory).length > 0 && (
             <section className="space-y-3">
-              <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400 px-1">
-                {t("report.operatingExpenses")}
-              </h3>
+              <div className="flex items-center justify-between px-1">
+                <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400">
+                  {t("report.operatingExpenses")} ({Object.keys(profit.expenseByCategory).length})
+                </h3>
+                <span className="text-xs text-gray-400">
+                  {language === "ru" ? "Снимите галочку для исключения из расчёта" : language === "uz" ? "Hisobdan chiqarish uchun belgilang" : "Uncheck to exclude from profit calc"}
+                </span>
+              </div>
               <Card className="flex flex-col divide-y divide-gray-100 dark:divide-zinc-800/80 p-0 overflow-hidden">
                 {Object.entries(profit.expenseByCategory)
                   .sort(([, a], [, b]) => b - a)
-                  .map(([cat, amount]) => (
-                    <div key={cat} className="flex items-center justify-between p-3.5 text-sm">
-                      <span className="text-gray-700 dark:text-zinc-300 font-semibold">
-                        {t(`expenseCategories.${cat}`, cat)}
-                      </span>
-                      <span className="font-bold text-rose-600 dark:text-rose-400 tabular-nums">{formatUZS(amount)}</span>
-                    </div>
-                  ))}
+                  .map(([cat, amount]) => {
+                    const isChecked = !excludedCategories.has(cat);
+                    const label =
+                      cat === "__UNCATEGORIZED__"
+                        ? t("common.noCategory")
+                        : t(`expenseCategories.${cat}`, cat);
+
+                    return (
+                      <label
+                        key={cat}
+                        className="flex items-center justify-between p-3.5 text-sm cursor-pointer hover:bg-gray-50/60 dark:hover:bg-zinc-800/40 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleCategory(cat)}
+                            className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 dark:bg-zinc-800 dark:border-zinc-700"
+                          />
+                          <span className={`font-semibold ${isChecked ? "text-gray-900 dark:text-white" : "text-gray-400 line-through"}`}>
+                            {label}
+                          </span>
+                        </div>
+                        <span className={`font-bold tabular-nums ${isChecked ? "text-rose-600 dark:text-rose-400" : "text-gray-400"}`}>
+                          {formatUZS(amount)}
+                        </span>
+                      </label>
+                    );
+                  })}
               </Card>
             </section>
           )}

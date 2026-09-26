@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useTransition } from "react";
-import { Plus, ShoppingCart, RotateCcw, Trash2 } from "lucide-react";
+import { Plus, ShoppingCart, RotateCcw, Trash2, Download } from "lucide-react";
 import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
@@ -18,6 +18,7 @@ import { CardSkeleton } from "@/components/ui/Skeleton";
 import { getSales, getProducts, createSale, deleteSale } from "@/app/actions/sales";
 import { getClients, createClient } from "@/app/actions/clients";
 import { useLanguage } from "@/lib/i18n/context";
+import { exportToExcel } from "@/lib/exportExcel";
 import type { SaleType } from "@prisma/client";
 
 type SaleWithRelations = Awaited<ReturnType<typeof getSales>>[number];
@@ -66,6 +67,10 @@ export default function SalesPage() {
   // New client inline
   const [newClientSheet, setNewClientSheet] = useState(false);
   const [newClientName, setNewClientName] = useState("");
+  const [newClientDistrict, setNewClientDistrict] = useState("");
+  const [newClientPhone, setNewClientPhone] = useState("");
+  const [newClientAddress, setNewClientAddress] = useState("");
+  const [newClientVisitFreq, setNewClientVisitFreq] = useState("");
 
   const loadData = () => {
     startTransition(async () => {
@@ -182,16 +187,115 @@ export default function SalesPage() {
     if (!newClientName.trim()) return;
     startTransition(async () => {
       try {
-        const client = await createClient({ name: newClientName.trim() });
+        const client = await createClient({
+          name: newClientName.trim(),
+          district: newClientDistrict.trim(),
+          phone: newClientPhone.trim(),
+          address: newClientAddress.trim(),
+          visitFrequency: newClientVisitFreq,
+        });
         setFormClientId(client.id);
         setClients((prev) => [...prev, client].sort((a, b) => a.name.localeCompare(b.name)));
         setNewClientSheet(false);
         setNewClientName("");
+        setNewClientDistrict("");
+        setNewClientPhone("");
+        setNewClientAddress("");
+        setNewClientVisitFreq("");
         showToast(t("common.add"));
       } catch (e) {
         showToast(e instanceof Error ? e.message : "Error", "error");
       }
     });
+  };
+  // Date range state for sales summary (Task 2)
+  const [salesDatePreset, setSalesDatePreset] = useState<"ALL" | "TODAY" | "7D" | "30D" | "MONTH" | "CUSTOM">("ALL");
+  const [salesCustomFrom, setSalesCustomFrom] = useState("");
+  const [salesCustomTo, setSalesCustomTo] = useState("");
+
+  const getSalesDateRange = () => {
+    const now = new Date();
+    const today = formatDateInput(now);
+    switch (salesDatePreset) {
+      case "TODAY": return { from: today, to: today };
+      case "7D": { const d = new Date(now); d.setDate(d.getDate() - 7); return { from: formatDateInput(d), to: today }; }
+      case "30D": { const d = new Date(now); d.setDate(d.getDate() - 30); return { from: formatDateInput(d), to: today }; }
+      case "MONTH": { const d = new Date(now.getFullYear(), now.getMonth(), 1); return { from: formatDateInput(d), to: today }; }
+      case "CUSTOM": return { from: salesCustomFrom || undefined, to: salesCustomTo || undefined };
+      default: return {};
+    }
+  };
+
+  const salesDateRange = getSalesDateRange();
+
+  const filteredSales = sales.filter((sale) => {
+    if (!salesDateRange.from && !salesDateRange.to) return true;
+    const saleDate = formatDateInput(new Date(sale.date));
+    if (salesDateRange.from && saleDate < salesDateRange.from) return false;
+    if (salesDateRange.to && saleDate > salesDateRange.to) return false;
+    return true;
+  });
+
+  const totalSalesSum = filteredSales
+    .filter(s => s.type === "SALE")
+    .reduce((sum, s) => sum + s.items.reduce((a, i) => a + Number(i.lineTotal), 0), 0);
+
+  const totalReturnsSum = filteredSales
+    .filter(s => s.type === "RETURN")
+    .reduce((sum, s) => sum + s.items.reduce((a, i) => a + Number(i.lineTotal), 0), 0);
+
+  const handleExportExcel = () => {
+    const headers = [
+      t("common.date"),
+      t("common.type"),
+      t("sales.client"),
+      t("sales.items"),
+      `${t("sales.salesSum")} (${t("common.sum")})`,
+      `${t("sales.paidAmount")} (${t("common.sum")})`,
+      `${t("sales.debtRemaining")} (${t("common.sum")})`,
+    ];
+
+    const rows = filteredSales.map((sale) => {
+      const total = sale.items.reduce((s, i) => s + Number(i.lineTotal), 0);
+      const paid = Number(sale.payment);
+      const debt = Math.max(0, total - paid);
+      const itemsStr = sale.items
+        .map((i) => {
+          if (i.product.name === "__OPENING_BALANCE__" || i.freebieFor === "Начальный долг") {
+            return `${t("common.openingDebt")}: ${formatUZS(i.lineTotal)}`;
+          }
+          return (
+            `${i.product.name} × ${Number(i.quantity)} ${i.product.unit}` +
+            (i.isFreebie ? ` (${t("sales.freebie")}: ${i.freebieFor || ""})` : "")
+          );
+        })
+        .join("; ");
+
+      return [
+        formatDateShort(sale.date, language),
+        sale.type === "SALE" ? t("sales.saleType") : t("sales.returnType"),
+        sale.client.name,
+        itemsStr,
+        sale.type === "SALE" ? total : -total,
+        paid,
+        debt,
+      ];
+    });
+
+    const summaryRows = [
+      [],
+      [t("common.total"), "", "", "", "", "", ""],
+      [t("sales.salesSum"), totalSalesSum],
+      [t("sales.returnsSum"), totalReturnsSum],
+      [language === "ru" ? "Чистая сумма" : "Net Total", totalSalesSum - totalReturnsSum],
+    ];
+
+    exportToExcel(`Продажи_${formatDateInput(new Date())}`, [
+      {
+        name: "Продажи",
+        data: [headers, ...rows, ...summaryRows],
+      },
+    ]);
   };
 
   return (
@@ -199,11 +303,72 @@ export default function SalesPage() {
       <PageHeader
         title={t("sales.title")}
         action={
-          <Button onClick={openNewSale} size="md">
-            <Plus size={18} /> {t("sales.newSale")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="md"
+              onClick={handleExportExcel}
+              disabled={filteredSales.length === 0}
+            >
+              <Download size={16} />
+              <span className="hidden sm:inline">{t("common.exportExcel")}</span>
+            </Button>
+            <Button onClick={openNewSale} size="md">
+              <Plus size={18} /> {t("sales.newSale")}
+            </Button>
+          </div>
         }
       />
+
+      {/* Sales Summary Row (Task 2) */}
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {(["ALL", "TODAY", "7D", "30D", "MONTH", "CUSTOM"] as const).map((preset) => {
+            const labels: Record<string, string> = {
+              ALL: t("common.all"),
+              TODAY: t("common.today"),
+              "7D": t("common.days7"),
+              "30D": t("common.days30"),
+              MONTH: t("common.thisMonth"),
+              CUSTOM: t("common.custom"),
+            };
+            return (
+              <button
+                key={preset}
+                onClick={() => setSalesDatePreset(preset)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  salesDatePreset === preset
+                    ? "bg-indigo-600 text-white shadow-sm"
+                    : "bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 hover:bg-gray-200 dark:hover:bg-zinc-700"
+                }`}
+              >
+                {labels[preset]}
+              </button>
+            );
+          })}
+        </div>
+
+        {salesDatePreset === "CUSTOM" && (
+          <div className="grid grid-cols-2 gap-3 max-w-md">
+            <Input label={t("common.from")} type="date" value={salesCustomFrom} onChange={(e) => setSalesCustomFrom(e.target.value)} />
+            <Input label={t("common.to")} type="date" value={salesCustomTo} onChange={(e) => setSalesCustomTo(e.target.value)} />
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3.5 max-w-lg">
+          <Card className="p-4 text-center">
+            <div className="text-xs font-bold uppercase text-gray-500 dark:text-zinc-400 mb-1">{t("sales.salesSum")}</div>
+            <div className="text-lg sm:text-xl font-extrabold text-indigo-600 dark:text-indigo-400 tabular-nums">{formatUZS(totalSalesSum)}</div>
+          </Card>
+          <Card className="p-4 text-center">
+            <div className="text-xs font-bold uppercase text-gray-500 dark:text-zinc-400 mb-1">{t("sales.returnsSum")}</div>
+            <div className="text-lg sm:text-xl font-extrabold text-rose-600 dark:text-rose-400 tabular-nums">{formatUZS(totalReturnsSum)}</div>
+          </Card>
+        </div>
+      </div>
+
+      {/* Divider */}
+      <div className="border-t border-gray-200/80 dark:border-zinc-800/60" />
 
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -211,7 +376,7 @@ export default function SalesPage() {
           <CardSkeleton />
           <CardSkeleton />
         </div>
-      ) : sales.length === 0 ? (
+      ) : filteredSales.length === 0 ? (
         <EmptyState
           icon={<ShoppingCart size={28} />}
           title={t("common.noData")}
@@ -221,7 +386,7 @@ export default function SalesPage() {
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {sales.map((sale) => {
+          {filteredSales.map((sale) => {
             const total = sale.items.reduce((s, i) => s + Number(i.lineTotal), 0);
             return (
               <Card
@@ -437,6 +602,33 @@ export default function SalesPage() {
             value={newClientName}
             onChange={(e) => setNewClientName(e.target.value)}
             placeholder="ООО Азия Трейд"
+            autoFocus
+          />
+          <Input
+            label={t("common.district")}
+            value={newClientDistrict}
+            onChange={(e) => setNewClientDistrict(e.target.value)}
+            placeholder="Чиланзар"
+          />
+          <Input
+            label={t("common.phone")}
+            value={newClientPhone}
+            onChange={(e) => setNewClientPhone(e.target.value)}
+            placeholder="+998 90 123 45 67"
+          />
+          <Input
+            label={t("common.address")}
+            value={newClientAddress}
+            onChange={(e) => setNewClientAddress(e.target.value)}
+            placeholder="ул. Амира Темура 1"
+          />
+          <Input
+            label={t("common.visitFrequency")}
+            type="number"
+            min="1"
+            value={newClientVisitFreq}
+            onChange={(e) => setNewClientVisitFreq(e.target.value)}
+            placeholder="7"
           />
           <Button onClick={handleAddClient} loading={isPending} size="lg">
             {t("common.save")}
