@@ -18,7 +18,7 @@ function safeRevalidate(path: string) {
   } catch {}
 }
 
-export const REAL_ITEMS_FILTER: Prisma.InventoryItemWhereInput = {
+const REAL_ITEMS_FILTER: Prisma.InventoryItemWhereInput = {
   isSystem: false,
   NOT: { name: "__OPENING_BALANCE__" },
 };
