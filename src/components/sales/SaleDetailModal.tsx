@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { formatUZS, formatDateShort } from "@/lib/format";
+import { formatUZS, formatDateShort, formatProductName } from "@/lib/format";
 import { useLanguage } from "@/lib/i18n/context";
 import { User, Calendar, Trash2, Edit2, Printer } from "lucide-react";
 import { SaleReceiptModal } from "./SaleReceiptModal";
@@ -92,7 +92,7 @@ export function SaleDetailModal({
               >
                 <div className="min-w-0 flex-1">
                   <div className="font-bold text-gray-900 dark:text-white truncate">
-                    {item.product.name}
+                    {formatProductName(item.product.name, language)}
                   </div>
                   <div className="text-xs text-gray-500 dark:text-zinc-400 mt-0.5">
                     {Number(item.quantity)} {item.product.unit} × {formatUZS(item.unitPrice)}{" "}

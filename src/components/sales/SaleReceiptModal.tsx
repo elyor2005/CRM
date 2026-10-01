@@ -3,7 +3,7 @@
 import React from "react";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { Button } from "@/components/ui/Button";
-import { formatUZS, formatDateShort } from "@/lib/format";
+import { formatUZS, formatDateShort, formatProductName } from "@/lib/format";
 import { useLanguage } from "@/lib/i18n/context";
 import { Printer, X, Building2, CheckCircle2 } from "lucide-react";
 import { SaleDetailData } from "./SaleDetailModal";
@@ -101,7 +101,7 @@ export function SaleReceiptModal({ sale, open, onClose }: SaleReceiptModalProps)
                 {sale.items.map((item, idx) => (
                   <tr key={item.id || idx} className="text-xs">
                     <td className="py-2 pr-1 font-sans font-bold text-gray-900 leading-tight">
-                      {item.product.name}
+                      {formatProductName(item.product.name, language)}
                       {item.isFreebie && (
                         <span className="block text-[10px] font-normal text-orange-600">
                           ({t("sales.freebie")})

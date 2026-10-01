@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useTransition } from "react";
 import { Plus, ShoppingCart, RotateCcw, Trash2, Download, CreditCard, Edit2 } from "lucide-react";
-import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
+import { formatUZS, formatDateShort, formatDateInput, formatProductName } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { SearchableSelect } from "@/components/ui/SearchableSelect";
@@ -59,7 +59,8 @@ interface SaleProductSummary {
 
 function getSaleProductsSummary(
   items: SaleWithRelations["items"],
-  openingDebtLabel: string
+  openingDebtLabel: string,
+  lang: "ru" | "uz" | "en" = "ru"
 ): SaleProductSummary {
   if (!items || items.length === 0) {
     return { displayedText: "—", remainingCount: 0, fullTitle: "" };
@@ -68,7 +69,7 @@ function getSaleProductsSummary(
   const names = items.map((i) =>
     i.product?.name === OPENING_BALANCE_ITEM_NAME || i.freebieFor === "Начальный долг"
       ? openingDebtLabel
-      : i.product?.name || "—"
+      : formatProductName(i.product?.name, lang)
   );
 
   const fullTitle = names.join(", ");
@@ -522,7 +523,8 @@ export default function SalesPage() {
                   {(() => {
                     const { displayedText, remainingCount, fullTitle } = getSaleProductsSummary(
                       sale.items,
-                      t("common.openingDebt")
+                      t("common.openingDebt"),
+                      language
                     );
                     return (
                       <div

@@ -74,3 +74,21 @@ export function parseUZS(formatted: string): number {
   const num = Number(cleaned);
   return isNaN(num) ? 0 : num;
 }
+
+/**
+ * Format product name, masking historical placeholder items like "Воздух"
+ */
+export function formatProductName(
+  name: string | null | undefined,
+  lang: "ru" | "uz" | "en" = "ru"
+): string {
+  if (!name) return "—";
+  if (name === "Воздух") {
+    return lang === "uz" ? "Tafsilotsiz" : lang === "en" ? "Without details" : "Без детализации";
+  }
+  if (name === "__OPENING_BALANCE__") {
+    return lang === "uz" ? "Boshlang'ich qoldiq" : lang === "en" ? "Opening debt" : "Начальный долг";
+  }
+  return name;
+}
+
