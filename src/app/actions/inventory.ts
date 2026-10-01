@@ -5,23 +5,14 @@ import {
   ProductionSchema,
   RestockSchema,
   WriteOffSchema,
+  BonusSchema,
   RecipeSchema,
   InventoryItemSchema,
 } from "@/lib/validations";
-import { revalidatePath } from "next/cache";
+import { revalidateAll } from "@/lib/revalidate";
 import { Prisma } from "@prisma/client";
 import { logAction } from "./audit";
-
-function safeRevalidate(path: string) {
-  try {
-    revalidatePath(path);
-  } catch {}
-}
-
-const REAL_ITEMS_FILTER: Prisma.InventoryItemWhereInput = {
-  isSystem: false,
-  NOT: { name: "__OPENING_BALANCE__" },
-};
+import { REAL_ITEMS_FILTER } from "@/lib/constants";
 
 export async function getInventoryByCategory() {
   const items = await prisma.inventoryItem.findMany({
@@ -69,7 +60,6 @@ export async function getFinishedGoodsMovementBreakdown(options?: {
 
   return items.map((item) => {
     const currentQty = Number(item.quantity);
-    let openingBalance = currentQty;
 
     let productionIn = 0;
     let returnIn = 0;
@@ -77,51 +67,61 @@ export async function getFinishedGoodsMovementBreakdown(options?: {
     let bonus = 0;
     let saleOut = 0;
 
+    // Changes that occurred AFTER the period end (toDate), to roll back currentQty to closingBalance
+    let afterPeriodNetChange = 0;
+
     for (const mov of item.stockMovements) {
       const movDate = new Date(mov.date);
-      const movQty = Number(mov.quantity);
+      const absQty = Math.abs(Number(mov.quantity));
 
-      // Movements on or after fromDate reversed from current quantity to calculate opening balance
-      if (fromDate && movDate >= fromDate) {
+      const isAfterToDate = toDate && movDate > toDate;
+      const isInPeriod = (!fromDate || movDate >= fromDate) && (!toDate || movDate <= toDate);
+
+      if (isAfterToDate) {
         if (mov.type === "PRODUCTION_IN" || mov.type === "RETURN_IN") {
-          openingBalance -= movQty;
+          afterPeriodNetChange += absQty;
         } else if (
           mov.type === "SALE_OUT" ||
           mov.type === "DEFECT" ||
           mov.type === "BONUS" ||
           mov.type === "PRODUCTION_CONSUME"
         ) {
-          openingBalance += movQty;
+          afterPeriodNetChange -= absQty;
         } else if (mov.type === "ADJUSTMENT") {
-          openingBalance -= movQty;
+          afterPeriodNetChange += Number(mov.quantity);
         }
       }
-
-      // Check if movement falls within [fromDate, toDate]
-      const isInPeriod =
-        (!fromDate || movDate >= fromDate) && (!toDate || movDate <= toDate);
 
       if (isInPeriod) {
         if (mov.type === "PRODUCTION_IN") {
-          productionIn += movQty;
+          productionIn += absQty;
         } else if (mov.type === "RETURN_IN") {
-          returnIn += movQty;
+          returnIn += absQty;
         } else if (mov.type === "DEFECT") {
-          defect += movQty;
+          defect += absQty;
         } else if (mov.type === "BONUS") {
-          bonus += movQty;
+          bonus += absQty;
         } else if (mov.type === "SALE_OUT") {
-          saleOut += movQty;
+          saleOut += absQty;
+        } else if (mov.type === "ADJUSTMENT") {
+          if (Number(mov.quantity) < 0) {
+            defect += absQty;
+          } else {
+            productionIn += absQty;
+          }
         }
       }
     }
 
-    if (!fromDate) {
-      openingBalance = currentQty - (productionIn + returnIn - defect - bonus - saleOut);
-      if (openingBalance < 0) openingBalance = 0;
-    }
+    // Closing balance as of toDate
+    const closingBalance = Math.max(0, currentQty - afterPeriodNetChange);
 
-    const closingBalance = openingBalance + productionIn + returnIn - defect - bonus - saleOut;
+    // Period net change: inflows - outflows
+    const periodNetChange = productionIn + returnIn - defect - bonus - saleOut;
+
+    // Opening balance at start of period
+    const openingBalance = Math.max(0, closingBalance - periodNetChange);
+
     const minStock = Number(item.minStock);
     const isLowStock = minStock > 0 && closingBalance <= minStock;
 
@@ -167,7 +167,7 @@ export async function getAllItems() {
 export async function createInventoryItem(data: unknown) {
   const parsed = InventoryItemSchema.parse(data);
 
-  await prisma.inventoryItem.create({
+  const item = await prisma.inventoryItem.create({
     data: {
       name: parsed.name,
       category: parsed.category,
@@ -181,16 +181,20 @@ export async function createInventoryItem(data: unknown) {
   await logAction({
     action: "CREATE",
     entity: "InventoryItem",
+    entityId: item.id,
     description: `Создан товар: ${parsed.name} (${parsed.category})`,
+    snapshot: { id: item.id, name: item.name },
   });
 
-  safeRevalidate("/warehouse");
+  revalidateAll();
+  return item;
 }
 
 export async function updateInventoryItem(id: string, data: unknown) {
   const parsed = InventoryItemSchema.parse(data);
+  const oldItem = await prisma.inventoryItem.findUnique({ where: { id } });
 
-  await prisma.inventoryItem.update({
+  const item = await prisma.inventoryItem.update({
     where: { id },
     data: {
       name: parsed.name,
@@ -207,18 +211,31 @@ export async function updateInventoryItem(id: string, data: unknown) {
     entity: "InventoryItem",
     entityId: id,
     description: `Обновлён товар: ${parsed.name}`,
+    snapshot: {
+      previous: oldItem
+        ? {
+            name: oldItem.name,
+            unit: oldItem.unit,
+            costPrice: Number(oldItem.costPrice),
+            salePrice: oldItem.salePrice ? Number(oldItem.salePrice) : null,
+            minStock: Number(oldItem.minStock),
+          }
+        : null,
+    },
   });
 
-  safeRevalidate("/warehouse");
+  revalidateAll();
+  return item;
 }
 
 /**
  * Produce a finished good: add stock and auto-deduct raw materials
- * via recipe lines.
+ * via recipe lines. Supports explicit date selection.
  */
 export async function produceItem(data: unknown) {
   const parsed = ProductionSchema.parse(data);
   const qty = Number(parsed.quantity);
+  const movDate = parsed.date ? new Date(parsed.date) : new Date();
 
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const item = await tx.inventoryItem.findUnique({
@@ -242,7 +259,7 @@ export async function produceItem(data: unknown) {
         itemId: parsed.itemId,
         type: "PRODUCTION_IN",
         quantity: new Prisma.Decimal(qty),
-        date: new Date(),
+        date: movDate,
         note: `Производство ${qty} ${item.unit}`,
       },
     });
@@ -251,7 +268,6 @@ export async function produceItem(data: unknown) {
     for (const line of item.recipeLines) {
       const consumeQty = Number(line.qtyPerUnit) * qty;
 
-      // Check if enough raw material
       if (Number(line.ingredient.quantity) < consumeQty) {
         throw new Error(
           `Недостаточно "${line.ingredient.name}": нужно ${consumeQty} ${line.ingredient.unit}, есть ${line.ingredient.quantity}`
@@ -270,7 +286,7 @@ export async function produceItem(data: unknown) {
           itemId: line.ingredientId,
           type: "PRODUCTION_CONSUME",
           quantity: new Prisma.Decimal(-consumeQty),
-          date: new Date(),
+          date: movDate,
           note: `Расход на "${item.name}" × ${qty}`,
         },
       });
@@ -281,21 +297,26 @@ export async function produceItem(data: unknown) {
     action: "PRODUCE",
     entity: "InventoryItem",
     entityId: parsed.itemId,
-    description: `Произведено ${qty} шт.`,
+    description: `Произведено ${qty} шт. (${movDate.toISOString().split("T")[0]})`,
   });
 
-  safeRevalidate("/warehouse");
-  safeRevalidate("/report");
+  revalidateAll();
 }
 
 /**
- * Restock raw material or packaging
+ * Restock raw material or packaging. Supports explicit date selection.
  */
 export async function restockItem(data: unknown) {
   const parsed = RestockSchema.parse(data);
   const qty = Number(parsed.quantity);
+  const movDate = parsed.date ? new Date(parsed.date) : new Date();
 
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const item = await tx.inventoryItem.findUnique({
+      where: { id: parsed.itemId },
+    });
+    if (!item) throw new Error("Товар не найден");
+
     await tx.inventoryItem.update({
       where: { id: parsed.itemId },
       data: { quantity: { increment: new Prisma.Decimal(qty) } },
@@ -304,9 +325,9 @@ export async function restockItem(data: unknown) {
     await tx.stockMovement.create({
       data: {
         itemId: parsed.itemId,
-        type: "ADJUSTMENT",
+        type: item.category === "FINISHED_GOOD" ? "PRODUCTION_IN" : "ADJUSTMENT",
         quantity: new Prisma.Decimal(qty),
-        date: new Date(),
+        date: movDate,
         note: "Приход",
       },
     });
@@ -316,21 +337,29 @@ export async function restockItem(data: unknown) {
     action: "RESTOCK",
     entity: "InventoryItem",
     entityId: parsed.itemId,
-    description: `Приход ${qty} шт.`,
+    description: `Приход ${qty} шт. (${movDate.toISOString().split("T")[0]})`,
   });
 
-  safeRevalidate("/warehouse");
-  safeRevalidate("/report");
+  revalidateAll();
 }
 
 /**
- * Write off items (defect, adjustment)
+ * Write off items (defect, adjustment). Supports explicit date selection.
  */
 export async function writeOffItem(data: unknown) {
   const parsed = WriteOffSchema.parse(data);
   const qty = Number(parsed.quantity);
+  const movDate = parsed.date ? new Date(parsed.date) : new Date();
 
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const item = await tx.inventoryItem.findUnique({
+      where: { id: parsed.itemId },
+    });
+    if (!item) throw new Error("Товар не найден");
+    if (Number(item.quantity) < qty) {
+      throw new Error(`Недостаточно товара на складе: доступно ${item.quantity}, запрошено ${qty}`);
+    }
+
     await tx.inventoryItem.update({
       where: { id: parsed.itemId },
       data: { quantity: { decrement: new Prisma.Decimal(qty) } },
@@ -341,7 +370,7 @@ export async function writeOffItem(data: unknown) {
         itemId: parsed.itemId,
         type: parsed.reason,
         quantity: new Prisma.Decimal(-qty),
-        date: new Date(),
+        date: movDate,
         note: parsed.note || (parsed.reason === "DEFECT" ? "Брак" : "Корректировка"),
       },
     });
@@ -351,11 +380,54 @@ export async function writeOffItem(data: unknown) {
     action: "WRITE_OFF",
     entity: "InventoryItem",
     entityId: parsed.itemId,
-    description: `Списание ${qty} шт. (${parsed.reason})`,
+    description: `Списание ${qty} шт. (${parsed.reason === "DEFECT" ? "Брак" : "Корректировка"})`,
   });
 
-  safeRevalidate("/warehouse");
-  safeRevalidate("/report");
+  revalidateAll();
+}
+
+/**
+ * Warehouse bonus/sample operation (freebie given directly from warehouse).
+ * Decrements inventory with no price/debt effect, records recipient name in note.
+ */
+export async function createBonusItem(data: unknown) {
+  const parsed = BonusSchema.parse(data);
+  const qty = Number(parsed.quantity);
+  const movDate = parsed.date ? new Date(parsed.date) : new Date();
+
+  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const item = await tx.inventoryItem.findUnique({
+      where: { id: parsed.itemId },
+    });
+    if (!item) throw new Error("Товар не найден");
+    if (Number(item.quantity) < qty) {
+      throw new Error(`Недостаточно товара на складе: доступно ${item.quantity}, запрошено ${qty}`);
+    }
+
+    await tx.inventoryItem.update({
+      where: { id: parsed.itemId },
+      data: { quantity: { decrement: new Prisma.Decimal(qty) } },
+    });
+
+    await tx.stockMovement.create({
+      data: {
+        itemId: parsed.itemId,
+        type: "BONUS",
+        quantity: new Prisma.Decimal(-qty),
+        date: movDate,
+        note: `Бонус: ${parsed.recipient}${parsed.note ? ` — ${parsed.note}` : ""}`,
+      },
+    });
+  });
+
+  await logAction({
+    action: "WRITE_OFF",
+    entity: "InventoryItem",
+    entityId: parsed.itemId,
+    description: `Бонус/Образец: ${qty} шт. получателю "${parsed.recipient}"`,
+  });
+
+  revalidateAll();
 }
 
 /**
@@ -365,12 +437,10 @@ export async function updateRecipe(data: unknown) {
   const parsed = RecipeSchema.parse(data);
 
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    // Delete existing recipe lines
     await tx.recipeLine.deleteMany({
       where: { productId: parsed.productId },
     });
 
-    // Create new recipe lines
     for (const line of parsed.lines) {
       await tx.recipeLine.create({
         data: {
@@ -382,7 +452,7 @@ export async function updateRecipe(data: unknown) {
     }
   });
 
-  safeRevalidate("/warehouse");
+  revalidateAll();
 }
 
 export async function getRecipe(productId: string) {
@@ -392,9 +462,6 @@ export async function getRecipe(productId: string) {
   });
 }
 
-/**
- * Get items below their minimum stock level
- */
 export async function getLowStockItems() {
   const items = await prisma.inventoryItem.findMany({
     where: {

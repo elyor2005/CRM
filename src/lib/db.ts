@@ -12,7 +12,15 @@ function createPrismaClient() {
     url = url.replace(/^psql\s+['"]?/, "").replace(/['"]?$/, "");
   }
 
+  const schemaMatch = url.match(/[?&]schema=([^&]+)/);
+  const schema = schemaMatch ? schemaMatch[1] : undefined;
+
   try {
+    if (schema && schema !== "public") {
+      return new PrismaClient({
+        datasources: { db: { url } },
+      });
+    }
     const adapter = new PrismaNeon({ connectionString: url });
     return new PrismaClient({ adapter });
   } catch (e) {

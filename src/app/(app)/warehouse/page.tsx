@@ -2,15 +2,19 @@
 
 import { useState, useEffect, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Package, Plus, AlertTriangle, Download } from "lucide-react";
+import { Package, Plus, AlertTriangle, Download, AlertOctagon, Gift, Layers, ArrowDownRight } from "lucide-react";
 import { formatUZS, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
-import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { useToast } from "@/components/ui/Toast";
+import { DateRangePicker, getDateRange, type DatePresetKey } from "@/components/ui/DateRangePicker";
 import {
   getInventoryByCategory,
   createInventoryItem,
   getFinishedGoodsMovementBreakdown,
+  produceItem,
+  restockItem,
+  writeOffItem,
+  createBonusItem,
 } from "@/app/actions/inventory";
 import { useLanguage } from "@/lib/i18n/context";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -20,38 +24,18 @@ import { Input } from "@/components/ui/Input";
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { CardSkeleton } from "@/components/ui/Skeleton";
+import { Table, TableRow } from "@/components/ui/Table";
 import { exportToExcel } from "@/lib/exportExcel";
 import type { ItemCategory } from "@prisma/client";
 
 type InventoryGroups = Awaited<ReturnType<typeof getInventoryByCategory>>;
 type FGMovementItem = Awaited<ReturnType<typeof getFinishedGoodsMovementBreakdown>>[number];
-type DatePreset = "TODAY" | "WEEK" | "MONTH" | "CUSTOM";
-
-function getDateRange(preset: DatePreset): { from: string; to: string } {
-  const now = new Date();
-  const today = formatDateInput(now);
-  switch (preset) {
-    case "TODAY":
-      return { from: today, to: today };
-    case "WEEK": {
-      const weekAgo = new Date(now);
-      weekAgo.setDate(weekAgo.getDate() - 7);
-      return { from: formatDateInput(weekAgo), to: today };
-    }
-    case "MONTH": {
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      return { from: formatDateInput(monthStart), to: today };
-    }
-    default:
-      return { from: today, to: today };
-  }
-}
 
 export default function WarehousePage() {
   const { language, t } = useLanguage();
   const [groups, setGroups] = useState<InventoryGroups | null>(null);
   const [fgMovements, setFgMovements] = useState<FGMovementItem[]>([]);
-  const [datePreset, setDatePreset] = useState<DatePreset>("TODAY");
+  const [datePreset, setDatePreset] = useState<string>("TODAY");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -59,6 +43,18 @@ export default function WarehousePage() {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
   const { showToast } = useToast();
+
+  // Quick action state (Defect, Bonus, Restock, Produce directly from card)
+  const [actionItem, setActionItem] = useState<{
+    type: "PRODUCTION" | "RESTOCK" | "DEFECT" | "BONUS";
+    id: string;
+    name: string;
+    unit: string;
+  } | null>(null);
+  const [actionQty, setActionQty] = useState("");
+  const [actionDate, setActionDate] = useState(() => formatDateInput(new Date()));
+  const [actionNote, setActionNote] = useState("");
+  const [actionRecipient, setActionRecipient] = useState("");
 
   // Form state
   const [formName, setFormName] = useState("");
@@ -76,10 +72,7 @@ export default function WarehousePage() {
 
   const loadData = () => {
     startTransition(async () => {
-      const range =
-        datePreset === "CUSTOM"
-          ? { from: customFrom || formatDateInput(new Date()), to: customTo || formatDateInput(new Date()) }
-          : getDateRange(datePreset);
+      const range = getDateRange(datePreset, customFrom, customTo);
 
       const [data, fgData] = await Promise.all([
         getInventoryByCategory(),
@@ -120,22 +113,61 @@ export default function WarehousePage() {
     });
   };
 
+  const handleActionSubmit = () => {
+    if (!actionItem || !actionQty || Number(actionQty) <= 0) return;
+    startTransition(async () => {
+      try {
+        if (actionItem.type === "PRODUCTION") {
+          await produceItem({ itemId: actionItem.id, quantity: actionQty, date: actionDate });
+          showToast(`Произведено: ${actionQty} ${actionItem.unit}`);
+        } else if (actionItem.type === "RESTOCK") {
+          await restockItem({ itemId: actionItem.id, quantity: actionQty, date: actionDate });
+          showToast(`Приход: ${actionQty} ${actionItem.unit}`);
+        } else if (actionItem.type === "DEFECT") {
+          await writeOffItem({
+            itemId: actionItem.id,
+            quantity: actionQty,
+            reason: "DEFECT",
+            note: actionNote || "Брак",
+            date: actionDate,
+          });
+          showToast(`Брак списан: ${actionQty} ${actionItem.unit}`);
+        } else if (actionItem.type === "BONUS") {
+          await createBonusItem({
+            itemId: actionItem.id,
+            quantity: actionQty,
+            recipient: actionRecipient,
+            note: actionNote,
+            date: actionDate,
+          });
+          showToast(`Бонус/образец выдан: ${actionQty} ${actionItem.unit}`);
+        }
+        setActionItem(null);
+        setActionQty("");
+        setActionNote("");
+        setActionRecipient("");
+        loadData();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Ошибка", "error");
+      }
+    });
+  };
+
   const handleExportExcel = () => {
     if (!groups) return;
 
-    // Sheet 1: Finished Goods Movement Breakdown
+    // Sheet 1: Finished Goods Movement Breakdown (10 columns matching table order)
     const fgHeaders = [
-      t("common.name"),
-      `${language === "ru" ? "Остаток на начало" : language === "uz" ? "Boshlang'ich qoldiq" : "Opening Balance"}`,
-      `${language === "ru" ? "Приход (Производство)" : language === "uz" ? "Kirim (Ishlab chiqarish)" : "Production In"}`,
-      `${language === "ru" ? "Возврат" : language === "uz" ? "Qaytarish" : "Return In"}`,
-      `${language === "ru" ? "Брак" : language === "uz" ? "Nuqsonli" : "Defect"}`,
-      `${language === "ru" ? "Бонус" : language === "uz" ? "Bonus" : "Bonus"}`,
-      `${language === "ru" ? "Продажи" : language === "uz" ? "Sotuvlar" : "Sales Out"}`,
-      `${language === "ru" ? "Остаток на конец" : language === "uz" ? "Yakuniy qoldiq" : "Closing Balance"}`,
-      t("warehouse.costPrice"),
-      t("warehouse.salePrice"),
-      `${t("warehouse.totalValue")} (${t("common.sum")})`,
+      language === "ru" ? "Название" : language === "uz" ? "Nomi" : "Name",
+      language === "ru" ? "Остаток на начало" : language === "uz" ? "Boshlang'ich qoldiq" : "Opening Balance",
+      language === "ru" ? "Производство (+)" : language === "uz" ? "Ishlab chiqarish (+)" : "Production (+)",
+      language === "ru" ? "Возврат (+)" : language === "uz" ? "Qaytarish (+)" : "Return (+)",
+      language === "ru" ? "Продажа (−)" : language === "uz" ? "Sotuv (−)" : "Sales (−)",
+      language === "ru" ? "Бонус/Образец (−)" : language === "uz" ? "Bonus/Namuna (−)" : "Bonus/Sample (−)",
+      language === "ru" ? "Брак (−)" : language === "uz" ? "Brak (−)" : "Defect (−)",
+      language === "ru" ? "Остаток на конец дня" : language === "uz" ? "Yakuniy qoldiq" : "Closing Balance",
+      language === "ru" ? "Себестоимость" : language === "uz" ? "Tannarx summasi" : "Cost Value",
+      language === "ru" ? "Сумма по цене продажи" : language === "uz" ? "Sotuv narxida summa" : "Sale Value",
     ];
 
     const fgRows = fgMovements.map((item) => [
@@ -143,13 +175,12 @@ export default function WarehousePage() {
       item.openingBalance,
       item.productionIn,
       item.returnIn,
-      item.defect,
-      item.bonus,
       item.saleOut,
+      item.bonus,
+      item.defect,
       item.closingBalance,
-      item.costPrice,
-      item.salePrice || 0,
       item.closingBalance * item.costPrice,
+      item.closingBalance * (item.salePrice || 0),
     ]);
 
     // Sheet 2: Raw Materials & Packaging
@@ -198,19 +229,15 @@ export default function WarehousePage() {
         title={t("warehouse.title")}
         action={
           <div className="flex flex-wrap items-center gap-2">
-            {/* 5a. Date/period selector */}
-            <div className="w-full sm:w-auto">
-              <SegmentedControl
-                value={datePreset}
-                onChange={(v) => setDatePreset(v as DatePreset)}
-                options={[
-                  { value: "TODAY", label: t("common.today") },
-                  { value: "WEEK", label: t("common.thisWeek") },
-                  { value: "MONTH", label: t("common.thisMonth") },
-                  { value: "CUSTOM", label: t("common.custom") },
-                ]}
-              />
-            </div>
+            {/* Shared Date/period selector */}
+            <DateRangePicker
+              value={datePreset}
+              onChange={setDatePreset}
+              customFrom={customFrom}
+              customTo={customTo}
+              onCustomFromChange={setCustomFrom}
+              onCustomToChange={setCustomTo}
+            />
             <Button
               variant="outline"
               size="md"
@@ -228,23 +255,6 @@ export default function WarehousePage() {
         }
       />
 
-      {datePreset === "CUSTOM" && (
-        <div className="grid grid-cols-2 gap-3 max-w-md">
-          <Input
-            label={t("common.from")}
-            type="date"
-            value={customFrom}
-            onChange={(e) => setCustomFrom(e.target.value)}
-          />
-          <Input
-            label={t("common.to")}
-            type="date"
-            value={customTo}
-            onChange={(e) => setCustomTo(e.target.value)}
-          />
-        </div>
-      )}
-
       {loading || !groups ? (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <CardSkeleton />
@@ -253,133 +263,153 @@ export default function WarehousePage() {
         </div>
       ) : (
         <div className="flex flex-col gap-8">
-          {/* 1. ГОТОВАЯ ПРОДУКЦИЯ (Task Group 5b breakdown) */}
+          {/* 1. ГОТОВАЯ ПРОДУКЦИЯ (Table view matching handwritten stock log) */}
           <section className="space-y-3">
-            <div className="flex items-center justify-between px-1">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
               <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400">
                 {categoryLabels.FINISHED_GOOD} ({groups.FINISHED_GOOD?.length || 0})
               </h3>
               {fgMovements.length > 0 && (
-                <span className="text-xs font-bold text-gray-500 dark:text-zinc-400 tabular-nums">
-                  {t("warehouse.totalValue")}:{" "}
-                  {formatUZS(
-                    fgMovements.reduce(
-                      (sum, item) => sum + item.closingBalance * item.costPrice,
-                      0
-                    )
-                  )}{" "}
-                  {t("common.sum")}
-                </span>
+                <div className="flex flex-wrap items-center gap-3 text-xs font-bold text-gray-500 dark:text-zinc-400 tabular-nums">
+                  <span>
+                    Себестоимость:{" "}
+                    {formatUZS(
+                      fgMovements.reduce(
+                        (sum, item) => sum + item.closingBalance * item.costPrice,
+                        0
+                      )
+                    )}{" "}
+                    {t("common.sum")}
+                  </span>
+                  <span>•</span>
+                  <span className="text-indigo-600 dark:text-indigo-400">
+                    По цене продажи:{" "}
+                    {formatUZS(
+                      fgMovements.reduce(
+                        (sum, item) => sum + item.closingBalance * (item.salePrice || 0),
+                        0
+                      )
+                    )}{" "}
+                    {t("common.sum")}
+                  </span>
+                </div>
               )}
             </div>
 
             {groups.FINISHED_GOOD?.length === 0 ? (
               <EmptyState icon={<Package size={24} />} title={t("common.noData")} />
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              <Table
+                minWidth="min-w-[950px]"
+                alignments={[
+                  "left",
+                  "right",
+                  "right",
+                  "right",
+                  "right",
+                  "right",
+                  "right",
+                  "right",
+                  "right",
+                  "right",
+                ]}
+                headers={[
+                  language === "ru" ? "Название" : language === "uz" ? "Nomi" : "Name",
+                  language === "ru" ? "Остаток на начало" : language === "uz" ? "Boshlang'ich qoldiq" : "Opening Balance",
+                  <span key="prod" className="text-emerald-600 dark:text-emerald-400">
+                    {language === "ru" ? "Производство (+)" : language === "uz" ? "Ishlab chiqarish (+)" : "Production (+)"}
+                  </span>,
+                  <span key="ret" className="text-emerald-600 dark:text-emerald-400">
+                    {language === "ru" ? "Возврат (+)" : language === "uz" ? "Qaytarish (+)" : "Return (+)"}
+                  </span>,
+                  <span key="sale" className="text-rose-600 dark:text-rose-400">
+                    {language === "ru" ? "Продажа (−)" : language === "uz" ? "Sotuv (−)" : "Sales (−)"}
+                  </span>,
+                  <span key="bonus" className="text-rose-600 dark:text-rose-400">
+                    {language === "ru" ? "Бонус/Образец (−)" : language === "uz" ? "Bonus/Namuna (−)" : "Bonus/Sample (−)"}
+                  </span>,
+                  <span key="defect" className="text-rose-600 dark:text-rose-400">
+                    {language === "ru" ? "Брак (−)" : language === "uz" ? "Brak (−)" : "Defect (−)"}
+                  </span>,
+                  language === "ru" ? "Остаток на конец дня" : language === "uz" ? "Yakuniy qoldiq" : "Closing Balance",
+                  language === "ru" ? "Себестоимость" : language === "uz" ? "Tannarx summasi" : "Cost Value",
+                  language === "ru" ? "Сумма по цене продажи" : language === "uz" ? "Sotuv narxida summa" : "Sale Value",
+                ]}
+              >
                 {(groups.FINISHED_GOOD || []).map((item) => {
                   const fg = fgMap.get(item.id);
                   const closingBal = fg ? fg.closingBalance : Number(item.quantity);
                   const isLowStock = fg ? fg.isLowStock : Number(item.minStock) > 0 && closingBal <= Number(item.minStock);
 
                   return (
-                    <Card
+                    <TableRow
                       key={item.id}
-                      hoverable
                       onClick={() => router.push(`/warehouse/${item.id}`)}
-                      className="flex flex-col justify-between gap-3 p-4 bg-white dark:bg-[#131823] border border-gray-200/80 dark:border-zinc-800"
+                      className="cursor-pointer group"
                     >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="font-extrabold text-base text-gray-900 dark:text-white leading-tight">
-                          {item.name}
-                        </div>
-                        {isLowStock && (
-                          <Badge variant="warning" className="shrink-0 flex items-center gap-1">
-                            <AlertTriangle size={12} />
-                            <span>{t("dashboard.lowStock")}</span>
-                          </Badge>
-                        )}
-                      </div>
-
-                      {/* 5b. Movement Breakdown Details */}
-                      {fg && (
-                        <div className="grid grid-cols-2 gap-y-1.5 gap-x-3 text-xs py-2.5 px-3 bg-gray-50/80 dark:bg-zinc-800/40 rounded-xl border border-gray-100 dark:border-zinc-800/60">
-                          <div className="flex items-center justify-between">
-                            <span className="text-gray-500 dark:text-zinc-400">
-                              {language === "ru" ? "Начало:" : language === "uz" ? "Boshlanish:" : "Opening:"}
-                            </span>
-                            <span className="font-bold text-gray-800 dark:text-zinc-200 tabular-nums">
-                              {fg.openingBalance} {fg.unit}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
-                              + {language === "ru" ? "Приход:" : language === "uz" ? "Kirim:" : "In:"}
-                            </span>
-                            <span className="font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
-                              {fg.productionIn}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-teal-600 dark:text-teal-400 font-semibold">
-                              + {language === "ru" ? "Возврат:" : language === "uz" ? "Qaytarish:" : "Return:"}
-                            </span>
-                            <span className="font-bold text-teal-600 dark:text-teal-400 tabular-nums">
-                              {fg.returnIn}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-rose-600 dark:text-rose-400 font-semibold">
-                              − {language === "ru" ? "Брак:" : language === "uz" ? "Brak:" : "Defect:"}
-                            </span>
-                            <span className="font-bold text-rose-600 dark:text-rose-400 tabular-nums">
-                              {fg.defect}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-orange-600 dark:text-orange-400 font-semibold">
-                              − {language === "ru" ? "Бонус:" : language === "uz" ? "Bonus:" : "Bonus:"}
-                            </span>
-                            <span className="font-bold text-orange-600 dark:text-orange-400 tabular-nums">
-                              {fg.bonus}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-gray-500 dark:text-zinc-400">
-                              − {language === "ru" ? "Продажи:" : language === "uz" ? "Sotuv:" : "Sales:"}
-                            </span>
-                            <span className="font-bold text-gray-700 dark:text-zinc-300 tabular-nums">
-                              {fg.saleOut}
-                            </span>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Footer: Closing balance & total value */}
-                      <div className="flex items-center justify-between text-xs text-gray-500 dark:text-zinc-400 pt-2.5 border-t border-gray-100 dark:border-zinc-800/80">
-                        <div>
-                          <span className="text-[11px] text-gray-400 block">
-                            {language === "ru" ? "Остаток на конец" : language === "uz" ? "Yakuniy qoldiq" : "Closing Balance"}
+                      {/* 1. Название */}
+                      <td className="px-4 sm:px-5 py-3.5 text-left font-medium">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-gray-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                            {item.name}
                           </span>
-                          <span className="font-extrabold text-gray-900 dark:text-white tabular-nums text-sm">
-                            {closingBal} {item.unit}
-                          </span>
+                          {isLowStock && (
+                            <Badge variant="warning" className="text-[10px] px-1.5 py-0.5 shrink-0 flex items-center gap-1 font-semibold">
+                              <AlertTriangle size={10} />
+                              <span>{t("dashboard.lowStock")}</span>
+                            </Badge>
+                          )}
                         </div>
-                        {Number(item.costPrice) > 0 && (
-                          <div className="text-right">
-                            <span className="text-[11px] text-gray-400 block">
-                              {t("warehouse.costPrice")}
-                            </span>
-                            <span className="font-semibold tabular-nums text-gray-700 dark:text-zinc-300">
-                              {formatUZS(closingBal * Number(item.costPrice))} {t("common.sum")}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    </Card>
+                      </td>
+
+                      {/* 2. Остаток на начало */}
+                      <td className="px-4 sm:px-5 py-3.5 text-right tabular-nums text-gray-700 dark:text-zinc-300">
+                        {fg ? fg.openingBalance : 0}
+                      </td>
+
+                      {/* 3. Производство (+) — green */}
+                      <td className="px-4 sm:px-5 py-3.5 text-right tabular-nums font-semibold text-emerald-600 dark:text-emerald-400">
+                        {fg ? fg.productionIn : 0}
+                      </td>
+
+                      {/* 4. Возврат (+) — green */}
+                      <td className="px-4 sm:px-5 py-3.5 text-right tabular-nums font-semibold text-emerald-600 dark:text-emerald-400">
+                        {fg ? fg.returnIn : 0}
+                      </td>
+
+                      {/* 5. Продажа (−) — red */}
+                      <td className="px-4 sm:px-5 py-3.5 text-right tabular-nums font-semibold text-rose-600 dark:text-rose-400">
+                        {fg ? fg.saleOut : 0}
+                      </td>
+
+                      {/* 6. Бонус/Образец (−) — red */}
+                      <td className="px-4 sm:px-5 py-3.5 text-right tabular-nums font-semibold text-rose-600 dark:text-rose-400">
+                        {fg ? fg.bonus : 0}
+                      </td>
+
+                      {/* 7. Брак (−) — red */}
+                      <td className="px-4 sm:px-5 py-3.5 text-right tabular-nums font-semibold text-rose-600 dark:text-rose-400">
+                        {fg ? fg.defect : 0}
+                      </td>
+
+                      {/* 8. Остаток на конец дня */}
+                      <td className="px-4 sm:px-5 py-3.5 text-right tabular-nums font-extrabold text-gray-900 dark:text-white">
+                        {closingBal} {item.unit}
+                      </td>
+
+                      {/* 9. Себестоимость */}
+                      <td className="px-4 sm:px-5 py-3.5 text-right tabular-nums text-gray-700 dark:text-zinc-300">
+                        {formatUZS(closingBal * Number(item.costPrice))} {t("common.sum")}
+                      </td>
+
+                      {/* 10. Сумма по цене продажи */}
+                      <td className="px-4 sm:px-5 py-3.5 text-right tabular-nums font-semibold text-indigo-600 dark:text-indigo-400">
+                        {formatUZS(closingBal * Number(item.salePrice || 0))} {t("common.sum")}
+                      </td>
+                    </TableRow>
                   );
                 })}
-              </div>
+              </Table>
             )}
           </section>
 
@@ -597,6 +627,84 @@ export default function WarehousePage() {
             {t("common.add")}
           </Button>
         </div>
+      </ModalSheet>
+
+      {/* Quick Operation Modal Sheet (Произв, Приход, Брак, Бонус) */}
+      <ModalSheet
+        open={actionItem !== null}
+        onClose={() => setActionItem(null)}
+        title={
+          actionItem
+            ? actionItem.type === "PRODUCTION"
+              ? `Производство: ${actionItem.name}`
+              : actionItem.type === "RESTOCK"
+              ? `Приход: ${actionItem.name}`
+              : actionItem.type === "DEFECT"
+              ? `Списание брака: ${actionItem.name}`
+              : `Бонус / Образец: ${actionItem.name}`
+            : ""
+        }
+      >
+        {actionItem && (
+          <div className="flex flex-col gap-4">
+            {actionItem.type === "DEFECT" && (
+              <p className="text-xs text-rose-600 dark:text-rose-400">
+                Списание брака уменьшит остаток на складе без начисления выручки или долга.
+              </p>
+            )}
+            {actionItem.type === "BONUS" && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                Бесплатная выдача бонуса или образца уменьшит остаток с сохранением имени получателя в истории движения.
+              </p>
+            )}
+            <Input
+              label="Дата операции"
+              type="date"
+              value={actionDate}
+              onChange={(e) => setActionDate(e.target.value)}
+            />
+            <Input
+              label={`Количество (${actionItem.unit})`}
+              type="number"
+              step="any"
+              min="0"
+              placeholder="0"
+              value={actionQty}
+              onChange={(e) => setActionQty(e.target.value)}
+              autoFocus
+            />
+            {actionItem.type === "BONUS" && (
+              <Input
+                label="Получатель (клиент / магазин / водитель)"
+                placeholder="Имя получателя..."
+                value={actionRecipient}
+                onChange={(e) => setActionRecipient(e.target.value)}
+              />
+            )}
+            <Input
+              label={actionItem.type === "DEFECT" ? "Причина брака / примечание" : "Примечание"}
+              placeholder="Необязательно..."
+              value={actionNote}
+              onChange={(e) => setActionNote(e.target.value)}
+            />
+            <Button
+              type="button"
+              variant={actionItem.type === "DEFECT" ? "destructive" : "primary"}
+              size="lg"
+              onClick={handleActionSubmit}
+              disabled={!actionQty || Number(actionQty) <= 0 || isPending}
+              loading={isPending}
+            >
+              {actionItem.type === "PRODUCTION"
+                ? "Произвести"
+                : actionItem.type === "RESTOCK"
+                ? "Оприходовать"
+                : actionItem.type === "DEFECT"
+                ? "Списать брак"
+                : "Выдать бонус / образец"}
+            </Button>
+          </div>
+        )}
       </ModalSheet>
     </div>
   );

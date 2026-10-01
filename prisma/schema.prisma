@@ -125,22 +125,35 @@ model Payment {
   note     String?
   method   PaymentMethod @default(CASH)
 
-  client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  client         Client         @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  financeEntries FinanceEntry[]
+}
+
+model ExpenseCategory {
+  id        String         @id @default(cuid())
+  name      String         @unique
+  createdAt DateTime       @default(now())
+
+  financeEntries FinanceEntry[]
 }
 
 model FinanceEntry {
-  id              String         @id @default(cuid())
-  date            DateTime       @default(now())
-  type            FinanceType
-  description     String
-  amount          Decimal        @db.Decimal(14, 2)
-  category        String?
-  paymentMethod   PaymentMethod?
-  relatedClientId String?
-  relatedSaleId   String?
+  id                String         @id @default(cuid())
+  date              DateTime       @default(now())
+  type              FinanceType
+  description       String
+  amount            Decimal        @db.Decimal(14, 2)
+  category          String?
+  expenseCategoryId String?
+  paymentMethod     PaymentMethod?
+  relatedClientId   String?
+  relatedSaleId     String?
+  relatedPaymentId  String?
 
-  relatedClient Client? @relation(fields: [relatedClientId], references: [id], onDelete: SetNull)
-  relatedSale   Sale?   @relation(fields: [relatedSaleId], references: [id], onDelete: SetNull)
+  relatedClient   Client?          @relation(fields: [relatedClientId], references: [id], onDelete: SetNull)
+  relatedSale     Sale?            @relation(fields: [relatedSaleId], references: [id], onDelete: SetNull)
+  relatedPayment  Payment?         @relation(fields: [relatedPaymentId], references: [id], onDelete: SetNull)
+  expenseCategory ExpenseCategory? @relation(fields: [expenseCategoryId], references: [id], onDelete: SetNull)
 }
 
 model StockMovement {
@@ -161,11 +174,20 @@ model LiabilityEntry {
   date   DateTime @default(now())
 }
 
+model AssetEntry {
+  id     String   @id @default(cuid())
+  name   String
+  amount Decimal  @db.Decimal(14, 2)
+  date   DateTime @default(now())
+}
+
 model AuditLog {
   id          String   @id @default(cuid())
   action      String
   entity      String
   entityId    String?
   description String
+  snapshot    Json?
   createdAt   DateTime @default(now())
 }
+

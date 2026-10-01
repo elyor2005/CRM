@@ -11,6 +11,8 @@ import {
   getBalanceReport,
   createLiabilityEntry,
   deleteLiabilityEntry,
+  createAssetEntry,
+  deleteAssetEntry,
 } from "@/app/actions/report";
 import { getProfitReport } from "@/app/actions/profit";
 import { useLanguage } from "@/lib/i18n/context";
@@ -20,30 +22,10 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { CardSkeleton } from "@/components/ui/Skeleton";
 import { exportToExcel } from "@/lib/exportExcel";
+import { DateRangePicker, getDateRange } from "@/components/ui/DateRangePicker";
 
 type ReportData = Awaited<ReturnType<typeof getBalanceReport>>;
 type ProfitData = Awaited<ReturnType<typeof getProfitReport>>;
-type ProfitDatePreset = "WEEK" | "MONTH" | "CUSTOM";
-
-function getProfitDateRange(preset: ProfitDatePreset): { from: string; to: string } {
-  const now = new Date();
-  const today = formatDateInput(now);
-  switch (preset) {
-    case "WEEK": {
-      const weekAgo = new Date(now);
-      weekAgo.setDate(weekAgo.getDate() - 7);
-      return { from: formatDateInput(weekAgo), to: today };
-    }
-    case "MONTH": {
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      return { from: formatDateInput(monthStart), to: today };
-    }
-    default: {
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      return { from: formatDateInput(monthStart), to: today };
-    }
-  }
-}
 
 export default function ReportPage() {
   const { language, t } = useLanguage();
@@ -55,12 +37,14 @@ export default function ReportPage() {
   const [balanceDate, setBalanceDate] = useState(formatDateInput(new Date()));
 
   // 8b: Profit report period range picker (default this month)
-  const [profitDatePreset, setProfitDatePreset] = useState<ProfitDatePreset>("MONTH");
+  const [profitDatePreset, setProfitDatePreset] = useState<string>("MONTH");
   const [profitCustomFrom, setProfitCustomFrom] = useState("");
   const [profitCustomTo, setProfitCustomTo] = useState("");
 
   // 8d: Expense categories include/exclude toggles (live client-side recalculation)
-  const [excludedCategories, setExcludedCategories] = useState<Set<string>>(new Set());
+  const [excludedCategories, setExcludedCategories] = useState<Set<string>>(
+    new Set(),
+  );
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -75,13 +59,11 @@ export default function ReportPage() {
 
   const loadData = () => {
     startTransition(async () => {
-      const pRange =
-        profitDatePreset === "CUSTOM"
-          ? {
-              from: profitCustomFrom || formatDateInput(new Date()),
-              to: profitCustomTo || formatDateInput(new Date()),
-            }
-          : getProfitDateRange(profitDatePreset);
+      const pRange = getDateRange(
+        profitDatePreset,
+        profitCustomFrom,
+        profitCustomTo,
+      );
 
       const [r, p] = await Promise.all([
         getBalanceReport({ asOfDate: balanceDate || undefined }),
@@ -140,6 +122,54 @@ export default function ReportPage() {
     });
   };
 
+  // Manual Asset Entry form (Task F)
+  const [assetSheetOpen, setAssetSheetOpen] = useState(false);
+  const [deleteAssetId, setDeleteAssetId] = useState<string | null>(null);
+  const [assetFormName, setAssetFormName] = useState("");
+  const [assetFormAmount, setAssetFormAmount] = useState("");
+  const [assetFormDate, setAssetFormDate] = useState(() =>
+    formatDateInput(new Date()),
+  );
+
+  const handleAssetSubmit = () => {
+    if (
+      !assetFormName.trim() ||
+      !assetFormAmount ||
+      Number(assetFormAmount) <= 0
+    )
+      return;
+    startTransition(async () => {
+      try {
+        await createAssetEntry({
+          name: assetFormName.trim(),
+          amount: assetFormAmount,
+          date: assetFormDate,
+        });
+        showToast("Актив добавлен");
+        setAssetSheetOpen(false);
+        setAssetFormName("");
+        setAssetFormAmount("");
+        loadData();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Ошибка", "error");
+      }
+    });
+  };
+
+  const handleDeleteAsset = () => {
+    if (!deleteAssetId) return;
+    startTransition(async () => {
+      try {
+        await deleteAssetEntry(deleteAssetId);
+        showToast(t("common.delete"));
+        setDeleteAssetId(null);
+        loadData();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Ошибка", "error");
+      }
+    });
+  };
+
   // Live recalculated operating expenses and net profit (8d)
   const includedExpenses = profit
     ? Object.entries(profit.expenseByCategory).reduce((sum, [cat, amt]) => {
@@ -163,7 +193,10 @@ export default function ReportPage() {
         [t("warehouse.packaging"), report.debit.packaging],
         [t("report.cashBalance"), report.debit.cash],
         [t("report.receivables"), report.debit.receivables],
-        [t("common.total") + " (" + t("report.debitSide") + ")", report.debit.total],
+        [
+          t("common.total") + " (" + t("report.debitSide") + ")",
+          report.debit.total,
+        ],
       ];
 
       const creditRows = [
@@ -173,13 +206,13 @@ export default function ReportPage() {
           `${l.name} (${formatDateShort(l.date, language)})`,
           Number(l.amount),
         ]),
-        [t("common.total") + " (" + t("report.creditSide") + ")", report.credit.total],
+        [
+          t("common.total") + " (" + t("report.creditSide") + ")",
+          report.credit.total,
+        ],
       ];
 
-      const summaryRows = [
-        [],
-        [t("report.netBalance"), report.netBalance],
-      ];
+      const summaryRows = [[], [t("report.netBalance"), report.netBalance]];
 
       exportToExcel(`Отчёт_Баланс_${balanceDate}`, [
         {
@@ -207,7 +240,9 @@ export default function ReportPage() {
         [],
         ["Операционные расходы по категориям", "Сумма", "Включено в расчет"],
         ...Object.entries(profit.expenseByCategory).map(([cat, amt]) => [
-          cat === "__UNCATEGORIZED__" ? t("common.noCategory") : t(`expenseCategories.${cat}`, cat),
+          cat === "__UNCATEGORIZED__"
+            ? t("common.noCategory")
+            : t(`expenseCategories.${cat}`, cat),
           amt,
           excludedCategories.has(cat) ? "Нет" : "Да",
         ]),
@@ -243,9 +278,16 @@ export default function ReportPage() {
             {tab === "BALANCE" ? (
               /* 8a. Historical Balance Date Picker (Unified Premium Capsule) */
               <div className="flex items-center bg-white dark:bg-[#131823] border border-gray-200/80 dark:border-zinc-800 rounded-xl px-3.5 py-2 shadow-xs hover:border-gray-300 dark:hover:border-zinc-700 transition-all gap-2.5 min-h-[44px]">
-                <Calendar size={16} className="text-indigo-500 dark:text-indigo-400 shrink-0" />
+                <Calendar
+                  size={16}
+                  className="text-indigo-500 dark:text-indigo-400 shrink-0"
+                />
                 <span className="text-xs font-bold text-gray-500 dark:text-zinc-400 whitespace-nowrap">
-                  {language === "ru" ? "На дату:" : language === "uz" ? "Sana:" : "As of:"}
+                  {language === "ru"
+                    ? "На дату:"
+                    : language === "uz"
+                      ? "Sana:"
+                      : "As of:"}
                 </span>
                 <input
                   type="date"
@@ -256,34 +298,15 @@ export default function ReportPage() {
               </div>
             ) : (
               /* 8b. Profit Report Period Range Picker */
-              <div className="flex flex-wrap items-center gap-2">
-                <SegmentedControl
-                  value={profitDatePreset}
-                  onChange={(v) => setProfitDatePreset(v as ProfitDatePreset)}
-                  options={[
-                    { value: "WEEK", label: t("common.thisWeek") },
-                    { value: "MONTH", label: t("common.thisMonth") },
-                    { value: "CUSTOM", label: t("common.custom") },
-                  ]}
-                />
-                {profitDatePreset === "CUSTOM" && (
-                  <div className="flex items-center bg-white dark:bg-[#131823] border border-gray-200/80 dark:border-zinc-800 rounded-xl px-3 py-1.5 gap-2 min-h-[44px] shadow-xs">
-                    <input
-                      type="date"
-                      value={profitCustomFrom}
-                      onChange={(e) => setProfitCustomFrom(e.target.value)}
-                      className="bg-transparent text-gray-900 dark:text-white text-xs sm:text-sm font-semibold outline-none cursor-pointer dark:[color-scheme:dark]"
-                    />
-                    <span className="text-xs text-gray-400 font-bold">—</span>
-                    <input
-                      type="date"
-                      value={profitCustomTo}
-                      onChange={(e) => setProfitCustomTo(e.target.value)}
-                      className="bg-transparent text-gray-900 dark:text-white text-xs sm:text-sm font-semibold outline-none cursor-pointer dark:[color-scheme:dark]"
-                    />
-                  </div>
-                )}
-              </div>
+              <DateRangePicker
+                value={profitDatePreset}
+                onChange={setProfitDatePreset}
+                presets={["TODAY", "7D", "30D", "MONTH", "CUSTOM"]}
+                customFrom={profitCustomFrom}
+                customTo={profitCustomTo}
+                onCustomFromChange={setProfitCustomFrom}
+                onCustomToChange={setProfitCustomTo}
+              />
             )}
 
             <Button
@@ -292,8 +315,13 @@ export default function ReportPage() {
               onClick={handleExportExcel}
               className="min-h-[44px] gap-2 px-3.5 bg-white dark:bg-[#131823] border-gray-200/80 dark:border-zinc-800 hover:bg-gray-50 dark:hover:bg-zinc-800/60 shadow-xs"
             >
-              <Download size={16} className="text-gray-500 dark:text-zinc-400" />
-              <span className="text-xs sm:text-sm font-bold">{t("common.exportExcel")}</span>
+              <Download
+                size={16}
+                className="text-gray-500 dark:text-zinc-400"
+              />
+              <span className="text-xs sm:text-sm font-bold">
+                {t("common.exportExcel")}
+              </span>
             </Button>
           </div>
         }
@@ -326,47 +354,122 @@ export default function ReportPage() {
             </span>
             <div
               className={`text-3xl sm:text-4xl font-extrabold tracking-tight tabular-nums my-1.5 ${
-                report.netBalance >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"
+                report.netBalance >= 0
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-rose-600 dark:text-rose-400"
               }`}
             >
               {formatUZS(report.netBalance)}{" "}
-              <span className="text-sm font-normal text-gray-500 dark:text-zinc-400">{t("common.sum")}</span>
+              <span className="text-sm font-normal text-gray-500 dark:text-zinc-400">
+                {t("common.sum")}
+              </span>
             </div>
             <div className="text-xs font-semibold text-gray-500 dark:text-zinc-400 tabular-nums">
-              {t("report.debitSide")}: {formatUZS(report.debit.total)} − {t("report.creditSide")}:{" "}
-              {formatUZS(report.credit.total)}
+              {t("report.debitSide")}: {formatUZS(report.debit.total)} −{" "}
+              {t("report.creditSide")}: {formatUZS(report.credit.total)}
             </div>
           </Card>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* DEBIT Column */}
             <div className="flex flex-col gap-3">
-              <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-900 dark:text-white px-1">
-                {t("report.debitSide")}
-              </h3>
+              <div className="flex items-center justify-between px-1">
+                <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-900 dark:text-white">
+                  {t("report.debitSide")}
+                </h3>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setAssetFormName("");
+                    setAssetFormAmount("");
+                    setAssetFormDate(formatDateInput(new Date()));
+                    setAssetSheetOpen(true);
+                  }}
+                  className="gap-1 text-xs"
+                >
+                  <Plus size={14} /> Добавить актив
+                </Button>
+              </div>
+
               <Card className="flex flex-col divide-y divide-gray-100 dark:divide-zinc-800/80 p-0 overflow-hidden">
                 <div className="flex items-center justify-between p-3.5 text-sm">
-                  <span className="text-gray-700 dark:text-zinc-300 font-medium">{t("warehouse.finishedGoods")}</span>
-                  <span className="font-extrabold text-gray-900 dark:text-white tabular-nums">{formatUZS(report.debit.finishedGoods)}</span>
+                  <span className="text-gray-700 dark:text-zinc-300 font-medium">
+                    {t("warehouse.finishedGoods")} (по цене продажи)
+                  </span>
+                  <span className="font-extrabold text-gray-900 dark:text-white tabular-nums">
+                    {formatUZS(report.debit.finishedGoods)}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between p-3.5 text-sm">
-                  <span className="text-gray-700 dark:text-zinc-300 font-medium">{t("warehouse.rawMaterials")}</span>
-                  <span className="font-extrabold text-gray-900 dark:text-white tabular-nums">{formatUZS(report.debit.rawMaterials)}</span>
+                  <span className="text-gray-700 dark:text-zinc-300 font-medium">
+                    {t("warehouse.rawMaterials")}
+                  </span>
+                  <span className="font-extrabold text-gray-900 dark:text-white tabular-nums">
+                    {formatUZS(report.debit.rawMaterials)}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between p-3.5 text-sm">
-                  <span className="text-gray-700 dark:text-zinc-300 font-medium">{t("warehouse.packaging")}</span>
-                  <span className="font-extrabold text-gray-900 dark:text-white tabular-nums">{formatUZS(report.debit.packaging)}</span>
+                  <span className="text-gray-700 dark:text-zinc-300 font-medium">
+                    {t("warehouse.packaging")}
+                  </span>
+                  <span className="font-extrabold text-gray-900 dark:text-white tabular-nums">
+                    {formatUZS(report.debit.packaging)}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between p-3.5 text-sm">
-                  <span className="text-gray-700 dark:text-zinc-300 font-medium">{t("report.cashBalance")}</span>
-                  <span className={`font-extrabold tabular-nums ${report.debit.cash >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+                  <span className="text-gray-700 dark:text-zinc-300 font-medium">
+                    {t("report.cashBalance")}
+                  </span>
+                  <span
+                    className={`font-extrabold tabular-nums ${report.debit.cash >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}
+                  >
                     {formatUZS(report.debit.cash)}
                   </span>
                 </div>
                 <div className="flex items-center justify-between p-3.5 text-sm">
-                  <span className="text-gray-700 dark:text-zinc-300 font-medium">{t("report.receivables")}</span>
-                  <span className="font-extrabold text-orange-600 dark:text-orange-400 tabular-nums">{formatUZS(report.debit.receivables)}</span>
+                  <span className="text-gray-700 dark:text-zinc-300 font-medium">
+                    {t("report.receivables")}
+                  </span>
+                  <span className="font-extrabold text-orange-600 dark:text-orange-400 tabular-nums">
+                    {formatUZS(report.debit.receivables)}
+                  </span>
                 </div>
+
+                {/* Manual Asset Entries */}
+                {report.debit.assets && report.debit.assets.length > 0 && (
+                  <div className="bg-indigo-50/20 dark:bg-indigo-950/20 divide-y divide-gray-100 dark:divide-zinc-800/80">
+                    <div className="px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                      Ручные активы
+                    </div>
+                    {report.debit.assets.map((asset: any) => (
+                      <div
+                        key={asset.id}
+                        onClick={() => setDeleteAssetId(asset.id)}
+                        className="flex items-center justify-between p-3.5 text-sm cursor-pointer hover:bg-gray-50/60 dark:hover:bg-zinc-800/40 transition-colors"
+                      >
+                        <div>
+                          <div className="font-semibold text-gray-900 dark:text-white">
+                            {asset.name}
+                          </div>
+                          <div className="text-xs text-gray-500 dark:text-zinc-400">
+                            {formatDateShort(asset.date, language)}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-extrabold text-indigo-600 dark:text-indigo-400 tabular-nums">
+                            {formatUZS(asset.amount)}
+                          </span>
+                          <Trash2
+                            size={16}
+                            className="text-gray-400 hover:text-rose-500"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between p-4 bg-gray-50/80 dark:bg-zinc-800/60 text-base font-extrabold">
                   <span>{t("common.total")}</span>
                   <span className="text-indigo-600 dark:text-indigo-400 tabular-nums">
@@ -398,7 +501,9 @@ export default function ReportPage() {
 
               <Card className="flex flex-col divide-y divide-gray-100 dark:divide-zinc-800/80 p-0 overflow-hidden">
                 {report.credit.liabilities.length === 0 ? (
-                  <div className="p-6 text-center text-sm text-gray-400">{t("common.noData")}</div>
+                  <div className="p-6 text-center text-sm text-gray-400">
+                    {t("common.noData")}
+                  </div>
                 ) : (
                   report.credit.liabilities.map((entry) => (
                     <div
@@ -407,12 +512,21 @@ export default function ReportPage() {
                       className="flex items-center justify-between p-3.5 text-sm cursor-pointer hover:bg-gray-50/60 dark:hover:bg-zinc-800/40 transition-colors"
                     >
                       <div>
-                        <div className="font-semibold text-gray-900 dark:text-white">{entry.name}</div>
-                        <div className="text-xs text-gray-500 dark:text-zinc-400">{formatDateShort(entry.date, language)}</div>
+                        <div className="font-semibold text-gray-900 dark:text-white">
+                          {entry.name}
+                        </div>
+                        <div className="text-xs text-gray-500 dark:text-zinc-400">
+                          {formatDateShort(entry.date, language)}
+                        </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="font-extrabold text-rose-600 dark:text-rose-400 tabular-nums">{formatUZS(entry.amount)}</span>
-                        <Trash2 size={16} className="text-gray-400 hover:text-rose-500" />
+                        <span className="font-extrabold text-rose-600 dark:text-rose-400 tabular-nums">
+                          {formatUZS(entry.amount)}
+                        </span>
+                        <Trash2
+                          size={16}
+                          className="text-gray-400 hover:text-rose-500"
+                        />
                       </div>
                     </div>
                   ))
@@ -443,11 +557,15 @@ export default function ReportPage() {
             </span>
             <div
               className={`text-3xl sm:text-4xl font-extrabold tracking-tight tabular-nums my-1.5 ${
-                liveNetProfit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"
+                liveNetProfit >= 0
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-rose-600 dark:text-rose-400"
               }`}
             >
               {formatUZS(liveNetProfit)}{" "}
-              <span className="text-sm font-normal text-gray-500 dark:text-zinc-400">{t("common.sum")}</span>
+              <span className="text-sm font-normal text-gray-500 dark:text-zinc-400">
+                {t("common.sum")}
+              </span>
             </div>
             <div className="text-xs font-semibold text-gray-500 dark:text-zinc-400 tabular-nums">
               {t("report.netMargin")}: {liveNetMargin}%
@@ -458,34 +576,66 @@ export default function ReportPage() {
           <Card className="flex flex-col divide-y divide-gray-100 dark:divide-zinc-800/80 p-0 overflow-hidden">
             <div className="flex items-center justify-between p-4 text-sm">
               <span className="text-gray-700 dark:text-zinc-300 font-semibold">
-                {t("report.totalSales")} {profit.totalReturns > 0 && <span className="text-xs font-normal text-gray-500">({language === "ru" ? "чистый объём" : language === "uz" ? "sof tushum" : "net"})</span>}
+                {t("report.totalSales")}{" "}
+                {profit.totalReturns > 0 && (
+                  <span className="text-xs font-normal text-gray-500">
+                    (
+                    {language === "ru"
+                      ? "чистый объём"
+                      : language === "uz"
+                        ? "sof tushum"
+                        : "net"}
+                    )
+                  </span>
+                )}
               </span>
               <span className="font-extrabold text-gray-900 dark:text-white text-base tabular-nums">
                 {formatUZS(profit.netSales)}
               </span>
             </div>
             <div className="flex items-center justify-between p-4 text-sm">
-              <span className="text-gray-700 dark:text-zinc-300 font-semibold">− {t("report.cogs")}</span>
-              <span className="font-bold text-rose-600 dark:text-rose-400 tabular-nums">{formatUZS(profit.cogs)}</span>
+              <span className="text-gray-700 dark:text-zinc-300 font-semibold">
+                − {t("report.cogs")}
+              </span>
+              <span className="font-bold text-rose-600 dark:text-rose-400 tabular-nums">
+                {formatUZS(profit.cogs)}
+              </span>
             </div>
             <div className="flex items-center justify-between p-4 bg-indigo-50/40 dark:bg-indigo-950/20 text-sm">
-              <span className="font-bold text-gray-900 dark:text-white">{t("report.grossProfit")}</span>
+              <span className="font-bold text-gray-900 dark:text-white">
+                {t("report.grossProfit")}
+              </span>
               <div className="text-right">
-                <span className={`font-extrabold text-base tabular-nums ${profit.grossProfit >= 0 ? "text-indigo-600 dark:text-indigo-400" : "text-rose-600 dark:text-rose-400"}`}>
+                <span
+                  className={`font-extrabold text-base tabular-nums ${profit.grossProfit >= 0 ? "text-indigo-600 dark:text-indigo-400" : "text-rose-600 dark:text-rose-400"}`}
+                >
                   {formatUZS(profit.grossProfit)}
                 </span>
-                <span className="text-xs text-gray-500 dark:text-zinc-400 ml-1 font-semibold tabular-nums">({profit.profitMargin}%)</span>
+                <span className="text-xs text-gray-500 dark:text-zinc-400 ml-1 font-semibold tabular-nums">
+                  ({profit.profitMargin}%)
+                </span>
               </div>
             </div>
             <div className="flex items-center justify-between p-4 text-sm">
               <span className="text-gray-700 dark:text-zinc-300 font-semibold">
-                − {t("report.operatingExpenses")} {excludedCategories.size > 0 && <span className="text-xs text-amber-600 dark:text-amber-400 font-normal">({language === "ru" ? "с фильтром" : "filtered"})</span>}
+                − {t("report.operatingExpenses")}{" "}
+                {excludedCategories.size > 0 && (
+                  <span className="text-xs text-amber-600 dark:text-amber-400 font-normal">
+                    ({language === "ru" ? "с фильтром" : "filtered"})
+                  </span>
+                )}
               </span>
-              <span className="font-bold text-rose-600 dark:text-rose-400 tabular-nums">{formatUZS(includedExpenses)}</span>
+              <span className="font-bold text-rose-600 dark:text-rose-400 tabular-nums">
+                {formatUZS(includedExpenses)}
+              </span>
             </div>
-            <div className={`flex items-center justify-between p-4 text-base font-extrabold ${liveNetProfit >= 0 ? "bg-emerald-50/50 dark:bg-emerald-950/20" : "bg-rose-50/50 dark:bg-rose-950/20"}`}>
+            <div
+              className={`flex items-center justify-between p-4 text-base font-extrabold ${liveNetProfit >= 0 ? "bg-emerald-50/50 dark:bg-emerald-950/20" : "bg-rose-50/50 dark:bg-rose-950/20"}`}
+            >
               <span>{t("report.netProfit")}</span>
-              <span className={`tabular-nums ${liveNetProfit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+              <span
+                className={`tabular-nums ${liveNetProfit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}
+              >
                 {formatUZS(liveNetProfit)} {t("common.sum")}
               </span>
             </div>
@@ -496,10 +646,15 @@ export default function ReportPage() {
             <section className="space-y-3">
               <div className="flex items-center justify-between px-1">
                 <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400">
-                  {t("report.operatingExpenses")} ({Object.keys(profit.expenseByCategory).length})
+                  {t("report.operatingExpenses")} (
+                  {Object.keys(profit.expenseByCategory).length})
                 </h3>
                 <span className="text-xs text-gray-400">
-                  {language === "ru" ? "Снимите галочку для исключения из расчёта" : language === "uz" ? "Hisobdan chiqarish uchun belgilang" : "Uncheck to exclude from profit calc"}
+                  {language === "ru"
+                    ? "Снимите галочку для исключения из расчёта"
+                    : language === "uz"
+                      ? "Hisobdan chiqarish uchun belgilang"
+                      : "Uncheck to exclude from profit calc"}
                 </span>
               </div>
               <Card className="flex flex-col divide-y divide-gray-100 dark:divide-zinc-800/80 p-0 overflow-hidden">
@@ -524,11 +679,15 @@ export default function ReportPage() {
                             onChange={() => toggleCategory(cat)}
                             className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 dark:bg-zinc-800 dark:border-zinc-700"
                           />
-                          <span className={`font-semibold ${isChecked ? "text-gray-900 dark:text-white" : "text-gray-400 line-through"}`}>
+                          <span
+                            className={`font-semibold ${isChecked ? "text-gray-900 dark:text-white" : "text-gray-400 line-through"}`}
+                          >
                             {label}
                           </span>
                         </div>
-                        <span className={`font-bold tabular-nums ${isChecked ? "text-rose-600 dark:text-rose-400" : "text-gray-400"}`}>
+                        <span
+                          className={`font-bold tabular-nums ${isChecked ? "text-rose-600 dark:text-rose-400" : "text-gray-400"}`}
+                        >
                           {formatUZS(amount)}
                         </span>
                       </label>
@@ -541,18 +700,50 @@ export default function ReportPage() {
       )}
 
       {/* Add Liability Modal Sheet */}
-      <ModalSheet open={sheetOpen} onClose={() => setSheetOpen(false)} title={t("report.addLiability")}>
+      <ModalSheet
+        open={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        title={t("report.addLiability")}
+      >
         <div className="flex flex-col gap-4">
-          <Input label={t("report.liabilityName")} placeholder="..." value={formName} onChange={(e) => setFormName(e.target.value)} autoFocus />
-          <Input label={t("common.amount")} type="number" step="any" min="0" placeholder="0" value={formAmount} onChange={(e) => setFormAmount(e.target.value)} />
-          <Input label={t("common.date")} type="date" value={formDate} onChange={(e) => setFormDate(e.target.value)} />
-          <Button type="button" variant="primary" size="lg" onClick={handleSubmit} disabled={!formName.trim() || !formAmount || Number(formAmount) <= 0} loading={isPending}>
+          <Input
+            label={t("report.liabilityName")}
+            placeholder="..."
+            value={formName}
+            onChange={(e) => setFormName(e.target.value)}
+            autoFocus
+          />
+          <Input
+            label={t("common.amount")}
+            type="number"
+            step="any"
+            min="0"
+            placeholder="0"
+            value={formAmount}
+            onChange={(e) => setFormAmount(e.target.value)}
+          />
+          <Input
+            label={t("common.date")}
+            type="date"
+            value={formDate}
+            onChange={(e) => setFormDate(e.target.value)}
+          />
+          <Button
+            type="button"
+            variant="primary"
+            size="lg"
+            onClick={handleSubmit}
+            disabled={
+              !formName.trim() || !formAmount || Number(formAmount) <= 0
+            }
+            loading={isPending}
+          >
             {t("common.add")}
           </Button>
         </div>
       </ModalSheet>
 
-      {/* Delete confirmation */}
+      {/* Delete confirmation (Liabilities) */}
       <ConfirmDialog
         open={!!deleteId}
         title={t("common.delete")}
@@ -561,6 +752,63 @@ export default function ReportPage() {
         destructive
         onConfirm={handleDelete}
         onCancel={() => setDeleteId(null)}
+      />
+
+      {/* Add Asset Modal Sheet (Task F) */}
+      <ModalSheet
+        open={assetSheetOpen}
+        onClose={() => setAssetSheetOpen(false)}
+        title="Добавить актив (Дебет)"
+      >
+        <div className="flex flex-col gap-4">
+          <Input
+            label="Название актива"
+            placeholder="Оборудование, транспорт, депозит..."
+            value={assetFormName}
+            onChange={(e) => setAssetFormName(e.target.value)}
+            autoFocus
+          />
+          <Input
+            label={t("common.amount")}
+            type="number"
+            step="any"
+            min="0"
+            placeholder="0"
+            value={assetFormAmount}
+            onChange={(e) => setAssetFormAmount(e.target.value)}
+          />
+          <Input
+            label={t("common.date")}
+            type="date"
+            value={assetFormDate}
+            onChange={(e) => setAssetFormDate(e.target.value)}
+          />
+          <Button
+            type="button"
+            variant="primary"
+            size="lg"
+            onClick={handleAssetSubmit}
+            disabled={
+              !assetFormName.trim() ||
+              !assetFormAmount ||
+              Number(assetFormAmount) <= 0
+            }
+            loading={isPending}
+          >
+            {t("common.add")}
+          </Button>
+        </div>
+      </ModalSheet>
+
+      {/* Delete confirmation (Assets) */}
+      <ConfirmDialog
+        open={!!deleteAssetId}
+        title={t("common.delete")}
+        message="Вы уверены, что хотите удалить этот актив из отчёта?"
+        confirmLabel={t("common.delete")}
+        destructive
+        onConfirm={handleDeleteAsset}
+        onCancel={() => setDeleteAssetId(null)}
       />
     </div>
   );

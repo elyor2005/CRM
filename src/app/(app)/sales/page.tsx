@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useTransition } from "react";
-import { Plus, ShoppingCart, RotateCcw, Trash2, Download } from "lucide-react";
+import { Plus, ShoppingCart, RotateCcw, Trash2, Download, CreditCard, Edit2 } from "lucide-react";
 import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
@@ -15,10 +15,15 @@ import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { CardSkeleton } from "@/components/ui/Skeleton";
-import { getSales, getProducts, createSale, deleteSale } from "@/app/actions/sales";
+import { Table, TableRow } from "@/components/ui/Table";
+import { getSales, getProducts, createSale, updateSale, deleteSale } from "@/app/actions/sales";
 import { getClients, createClient } from "@/app/actions/clients";
 import { useLanguage } from "@/lib/i18n/context";
 import { exportToExcel } from "@/lib/exportExcel";
+import { SaleDetailModal } from "@/components/sales/SaleDetailModal";
+import { ReceivePaymentModal } from "@/components/payments/ReceivePaymentModal";
+import { OPENING_BALANCE_ITEM_NAME } from "@/lib/constants";
+import { DateRangePicker, getDateRange } from "@/components/ui/DateRangePicker";
 import type { SaleType } from "@prisma/client";
 
 type SaleWithRelations = Awaited<ReturnType<typeof getSales>>[number];
@@ -30,8 +35,8 @@ interface LineItem {
   productId: string;
   quantity: string;
   unitPrice: string;
-  isFreebie: boolean;
-  freebieFor: string;
+  isFreebie?: boolean;
+  freebieFor?: string | null;
 }
 
 function emptyLine(): LineItem {
@@ -41,7 +46,45 @@ function emptyLine(): LineItem {
     quantity: "1",
     unitPrice: "",
     isFreebie: false,
-    freebieFor: "",
+    freebieFor: null,
+  };
+}
+
+interface SaleProductSummary {
+  displayedText: string;
+  remainingCount: number;
+  fullTitle: string;
+}
+
+function getSaleProductsSummary(
+  items: SaleWithRelations["items"],
+  openingDebtLabel: string
+): SaleProductSummary {
+  if (!items || items.length === 0) {
+    return { displayedText: "—", remainingCount: 0, fullTitle: "" };
+  }
+
+  const names = items.map((i) =>
+    i.product?.name === OPENING_BALANCE_ITEM_NAME || i.freebieFor === "Начальный долг"
+      ? openingDebtLabel
+      : i.product?.name || "—"
+  );
+
+  const fullTitle = names.join(", ");
+
+  if (names.length <= 2) {
+    return {
+      displayedText: names.join(", "),
+      remainingCount: 0,
+      fullTitle,
+    };
+  }
+
+  const remainingCount = names.length - 2;
+  return {
+    displayedText: `${names[0]}, ${names[1]}`,
+    remainingCount,
+    fullTitle,
   };
 }
 
@@ -52,9 +95,15 @@ export default function SalesPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [selectedSaleForDetail, setSelectedSaleForDetail] = useState<SaleWithRelations | null>(null);
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [loading, setLoading] = useState(true);
   const { showToast } = useToast();
+
+
+  // Editing state
+  const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
 
   // Form state
   const [formType, setFormType] = useState<SaleType>("SALE");
@@ -87,6 +136,7 @@ export default function SalesPage() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resetForm = () => {
+    setEditingSaleId(null);
     setFormType("SALE");
     setFormClientId("");
     setFormDate(formatDateInput(new Date()));
@@ -100,6 +150,28 @@ export default function SalesPage() {
     setSheetOpen(true);
   };
 
+  const handleOpenEdit = (sale: SaleWithRelations) => {
+    setEditingSaleId(sale.id);
+    setFormType(sale.type as SaleType);
+    setFormClientId(sale.clientId);
+    setFormDate(formatDateInput(new Date(sale.date)));
+    setFormPayment(Number(sale.payment) > 0 ? String(sale.payment) : "");
+    setFormItems(
+      sale.items.length > 0
+        ? sale.items.map((item) => ({
+            id: item.id || Math.random().toString(36).slice(2),
+            productId: item.productId,
+            quantity: String(item.quantity),
+            unitPrice: String(item.unitPrice),
+            isFreebie: item.isFreebie,
+            freebieFor: item.freebieFor,
+          }))
+        : [emptyLine()]
+    );
+    setFormErrors([]);
+    setSheetOpen(true);
+  };
+
   const updateLineItem = (id: string, field: keyof LineItem, value: string | boolean) => {
     setFormItems((prev) =>
       prev.map((item) => {
@@ -110,9 +182,6 @@ export default function SalesPage() {
           if (product?.salePrice) {
             updated.unitPrice = String(Number(product.salePrice));
           }
-        }
-        if (field === "isFreebie" && value === true) {
-          updated.unitPrice = "0";
         }
         return updated;
       })
@@ -129,7 +198,6 @@ export default function SalesPage() {
   };
 
   const saleTotal = formItems.reduce((sum, item) => {
-    if (item.isFreebie) return sum;
     return sum + Number(item.quantity || 0) * Number(item.unitPrice || 0);
   }, 0);
 
@@ -146,7 +214,7 @@ export default function SalesPage() {
 
     startTransition(async () => {
       try {
-        await createSale({
+        const payload = {
           clientId: formClientId,
           type: formType,
           date: formDate,
@@ -154,13 +222,26 @@ export default function SalesPage() {
           items: formItems.map((item) => ({
             productId: item.productId,
             quantity: item.quantity,
-            unitPrice: item.isFreebie ? "0" : item.unitPrice,
-            isFreebie: item.isFreebie,
-            freebieFor: item.freebieFor,
+            unitPrice: item.unitPrice,
+            isFreebie: item.isFreebie ?? false,
+            freebieFor: item.freebieFor ?? undefined,
           })),
-        });
+        };
 
-        showToast(formType === "SALE" ? t("sales.newSale") : t("sales.returnType"));
+        if (editingSaleId) {
+          await updateSale(editingSaleId, payload);
+          showToast(
+            language === "ru"
+              ? "Продажа обновлена"
+              : language === "uz"
+              ? "Sotuv yangilandi"
+              : "Sale updated"
+          );
+        } else {
+          await createSale(payload);
+          showToast(formType === "SALE" ? t("sales.newSale") : t("sales.returnType"));
+        }
+
         setSheetOpen(false);
         resetForm();
         loadData();
@@ -209,24 +290,11 @@ export default function SalesPage() {
     });
   };
   // Date range state for sales summary (Task 2)
-  const [salesDatePreset, setSalesDatePreset] = useState<"ALL" | "TODAY" | "7D" | "30D" | "MONTH" | "CUSTOM">("ALL");
+  const [salesDatePreset, setSalesDatePreset] = useState<string>("ALL");
   const [salesCustomFrom, setSalesCustomFrom] = useState("");
   const [salesCustomTo, setSalesCustomTo] = useState("");
 
-  const getSalesDateRange = () => {
-    const now = new Date();
-    const today = formatDateInput(now);
-    switch (salesDatePreset) {
-      case "TODAY": return { from: today, to: today };
-      case "7D": { const d = new Date(now); d.setDate(d.getDate() - 7); return { from: formatDateInput(d), to: today }; }
-      case "30D": { const d = new Date(now); d.setDate(d.getDate() - 30); return { from: formatDateInput(d), to: today }; }
-      case "MONTH": { const d = new Date(now.getFullYear(), now.getMonth(), 1); return { from: formatDateInput(d), to: today }; }
-      case "CUSTOM": return { from: salesCustomFrom || undefined, to: salesCustomTo || undefined };
-      default: return {};
-    }
-  };
-
-  const salesDateRange = getSalesDateRange();
+  const salesDateRange = getDateRange(salesDatePreset, salesCustomFrom, salesCustomTo);
 
   const filteredSales = sales.filter((sale) => {
     if (!salesDateRange.from && !salesDateRange.to) return true;
@@ -261,7 +329,7 @@ export default function SalesPage() {
       const debt = Math.max(0, total - paid);
       const itemsStr = sale.items
         .map((i) => {
-          if (i.product.name === "__OPENING_BALANCE__" || i.freebieFor === "Начальный долг") {
+          if (i.product.name === OPENING_BALANCE_ITEM_NAME || i.freebieFor === "Начальный долг") {
             return `${t("common.openingDebt")}: ${formatUZS(i.lineTotal)}`;
           }
           return (
@@ -314,6 +382,15 @@ export default function SalesPage() {
               <Download size={16} className="text-gray-500 dark:text-zinc-400" />
               <span className="text-xs sm:text-sm font-bold">{t("common.exportExcel")}</span>
             </Button>
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={() => setPaymentModalOpen(true)}
+              className="min-h-[44px] gap-2 px-3.5 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-900/50 hover:bg-emerald-100 dark:hover:bg-emerald-950/50 shadow-xs"
+            >
+              <CreditCard size={18} />
+              <span className="text-xs sm:text-sm font-bold">{t("debts.addPayment")}</span>
+            </Button>
             <Button onClick={openNewSale} size="md">
               <Plus size={18} /> {t("sales.newSale")}
             </Button>
@@ -323,38 +400,15 @@ export default function SalesPage() {
 
       {/* Sales Summary Row (Task 2) */}
       <div className="space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          {(["ALL", "TODAY", "7D", "30D", "MONTH", "CUSTOM"] as const).map((preset) => {
-            const labels: Record<string, string> = {
-              ALL: t("common.all"),
-              TODAY: t("common.today"),
-              "7D": t("common.days7"),
-              "30D": t("common.days30"),
-              MONTH: t("common.thisMonth"),
-              CUSTOM: t("common.custom"),
-            };
-            return (
-              <button
-                key={preset}
-                onClick={() => setSalesDatePreset(preset)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                  salesDatePreset === preset
-                    ? "bg-indigo-600 text-white shadow-sm"
-                    : "bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 hover:bg-gray-200 dark:hover:bg-zinc-700"
-                }`}
-              >
-                {labels[preset]}
-              </button>
-            );
-          })}
-        </div>
-
-        {salesDatePreset === "CUSTOM" && (
-          <div className="grid grid-cols-2 gap-3 max-w-md">
-            <Input label={t("common.from")} type="date" value={salesCustomFrom} onChange={(e) => setSalesCustomFrom(e.target.value)} />
-            <Input label={t("common.to")} type="date" value={salesCustomTo} onChange={(e) => setSalesCustomTo(e.target.value)} />
-          </div>
-        )}
+        <DateRangePicker
+          value={salesDatePreset}
+          onChange={setSalesDatePreset}
+          presets={["ALL", "TODAY", "7D", "30D", "MONTH", "CUSTOM"]}
+          customFrom={salesCustomFrom}
+          customTo={salesCustomTo}
+          onCustomFromChange={setSalesCustomFrom}
+          onCustomToChange={setSalesCustomTo}
+        />
 
         <div className="grid grid-cols-2 gap-3.5 max-w-lg">
           <Card className="p-4 text-center">
@@ -386,49 +440,109 @@ export default function SalesPage() {
           onAction={openNewSale}
         />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <Table
+          headers={[
+            t("common.date"),
+            t("sales.client"),
+            t("common.type"),
+            t("sales.products"),
+            t("sales.paidAmount"),
+            t("common.amount"),
+            t("common.actions"),
+          ]}
+          alignments={["left", "left", "center", "left", "right", "right", "center"]}
+          minWidth="min-w-[850px]"
+        >
           {filteredSales.map((sale) => {
             const total = sale.items.reduce((s, i) => s + Number(i.lineTotal), 0);
+            const paid = Number(sale.payment);
+            const isSale = sale.type === "SALE";
             return (
-              <Card
+              <TableRow
                 key={sale.id}
-                hoverable
-                onClick={() => setDeleteConfirm(sale.id)}
-                className="flex flex-col justify-between gap-3 p-5"
+                onClick={() => setSelectedSaleForDetail(sale)}
               >
-                <div>
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <span className="font-extrabold text-base text-gray-900 dark:text-white truncate">
-                      {sale.client.name}
+                <td className="px-4 sm:px-5 py-3.5 whitespace-nowrap text-gray-700 dark:text-zinc-300 font-medium">
+                  {formatDateShort(sale.date, language)}
+                </td>
+                <td className="px-4 sm:px-5 py-3.5 text-gray-900 dark:text-white font-extrabold truncate max-w-[200px]">
+                  {sale.client.name}
+                </td>
+                <td className="px-4 sm:px-5 py-3.5 whitespace-nowrap text-center">
+                  <Badge variant={isSale ? "sale" : "return"}>
+                    {isSale ? t("sales.saleType") : t("sales.returnType")}
+                  </Badge>
+                </td>
+                <td className="px-4 sm:px-5 py-3.5 whitespace-nowrap">
+                  {(() => {
+                    const { displayedText, remainingCount, fullTitle } = getSaleProductsSummary(
+                      sale.items,
+                      t("common.openingDebt")
+                    );
+                    return (
+                      <div
+                        className="flex items-center gap-1.5 max-w-[260px] sm:max-w-[300px]"
+                        title={fullTitle}
+                      >
+                        <span className="truncate text-gray-700 dark:text-zinc-300 font-medium">
+                          {displayedText}
+                        </span>
+                        {remainingCount > 0 && (
+                          <span className="shrink-0 px-1.5 py-0.5 text-[11px] font-bold rounded-md bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 border border-gray-200/60 dark:border-zinc-700/60 tabular-nums">
+                            +{remainingCount}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </td>
+                <td className="px-4 sm:px-5 py-3.5 whitespace-nowrap text-right tabular-nums">
+                  {paid > 0 ? (
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                      {formatUZS(paid)}
                     </span>
-                    <Badge variant={sale.type === "SALE" ? "sale" : "return"}>
-                      {sale.type === "SALE" ? t("sales.saleType") : t("sales.returnType")}
-                    </Badge>
+                  ) : (
+                    <span className="text-gray-400 dark:text-zinc-600">—</span>
+                  )}
+                </td>
+                <td
+                  className={`px-4 sm:px-5 py-3.5 whitespace-nowrap text-right font-extrabold tabular-nums ${
+                    isSale ? "text-gray-900 dark:text-white" : "text-rose-600 dark:text-rose-400"
+                  }`}
+                >
+                  {isSale ? "" : "−"}
+                  {formatUZS(total)}
+                </td>
+                <td className="px-4 sm:px-5 py-3.5 whitespace-nowrap text-center">
+                  <div className="flex items-center justify-center gap-1">
+                    <button
+                      type="button"
+                      title={t("common.edit")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenEdit(sale);
+                      }}
+                      className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition-colors cursor-pointer"
+                    >
+                      <Edit2 size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      title={t("common.delete")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteConfirm(sale.id);
+                      }}
+                      className="p-1.5 rounded-lg text-gray-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                    >
+                      <Trash2 size={15} />
+                    </button>
                   </div>
-                  <div className="text-xs font-medium text-gray-500 dark:text-zinc-400">
-                    {formatDateShort(sale.date, language)}
-                    {sale.items.length > 0 && ` · ${sale.items.length} ${t("sales.lineItems")}`}
-                  </div>
-                </div>
-
-                <div className="pt-3 border-t border-gray-100 dark:border-zinc-800/80 flex items-baseline justify-between">
-                  <div>
-                    {Number(sale.payment) > 0 && (
-                      <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
-                        {t("sales.paidAmount")}: {formatUZS(sale.payment)}
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <span className="text-lg font-extrabold text-gray-900 dark:text-white tracking-tight tabular-nums">
-                      {formatUZS(total)}
-                    </span>
-                  </div>
-                </div>
-              </Card>
+                </td>
+              </TableRow>
             );
           })}
-        </div>
+        </Table>
       )}
 
       {/* Floating Action Button (Mobile) */}
@@ -439,11 +553,18 @@ export default function SalesPage() {
         <Plus size={26} />
       </button>
 
-      {/* New Sale ModalSheet */}
+      {/* Sale ModalSheet */}
       <ModalSheet
         open={sheetOpen}
-        onClose={() => setSheetOpen(false)}
-        title={formType === "SALE" ? t("sales.newSale") : t("sales.returnType")}
+        onClose={() => {
+          setSheetOpen(false);
+          resetForm();
+        }}
+        title={
+          editingSaleId
+            ? (language === "ru" ? "Редактировать продажу" : language === "uz" ? "Sotuvni tahrirlash" : "Edit sale")
+            : (formType === "SALE" ? t("sales.newSale") : t("sales.returnType"))
+        }
       >
         <div className="flex flex-col gap-4">
           <SegmentedControl
@@ -531,30 +652,8 @@ export default function SalesPage() {
                     placeholder={t("sales.price")}
                     value={item.unitPrice}
                     onChange={(e) => updateLineItem(item.id, "unitPrice", e.target.value)}
-                    disabled={item.isFreebie}
                   />
                 </div>
-
-                <div className="flex items-center gap-2 pt-1">
-                  <input
-                    type="checkbox"
-                    id={`freebie-${item.id}`}
-                    checked={item.isFreebie}
-                    onChange={(e) => updateLineItem(item.id, "isFreebie", e.target.checked)}
-                    className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
-                  />
-                  <label htmlFor={`freebie-${item.id}`} className="text-xs font-semibold text-gray-700 dark:text-zinc-300">
-                    {t("sales.freebie")}
-                  </label>
-                </div>
-
-                {item.isFreebie && (
-                  <Input
-                    placeholder={t("sales.freebieFor")}
-                    value={item.freebieFor}
-                    onChange={(e) => updateLineItem(item.id, "freebieFor", e.target.value)}
-                  />
-                )}
               </div>
             ))}
           </div>
@@ -645,6 +744,28 @@ export default function SalesPage() {
         destructive
         onConfirm={() => deleteConfirm && handleDelete(deleteConfirm)}
         onCancel={() => setDeleteConfirm(null)}
+      />
+
+      {/* Sale Detail Modal */}
+      <SaleDetailModal
+        sale={selectedSaleForDetail}
+        open={!!selectedSaleForDetail}
+        onClose={() => setSelectedSaleForDetail(null)}
+        onDelete={(id) => setDeleteConfirm(id)}
+        onEdit={(sale) => {
+          const fullSale = sales.find((s) => s.id === sale.id);
+          if (fullSale) {
+            setSelectedSaleForDetail(null);
+            handleOpenEdit(fullSale);
+          }
+        }}
+      />
+
+      {/* Receive Payment Modal */}
+      <ReceivePaymentModal
+        open={paymentModalOpen}
+        onClose={() => setPaymentModalOpen(false)}
+        onSuccess={() => loadData()}
       />
     </div>
   );

@@ -2,16 +2,8 @@
 
 import { prisma } from "@/lib/db";
 import { ClientSchema } from "@/lib/validations";
-import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
-
-function safeRevalidate(path: string) {
-  try {
-    revalidatePath(path);
-  } catch {}
-}
-
-const OPENING_BALANCE_ITEM_NAME = "__OPENING_BALANCE__";
+import { OPENING_BALANCE_ITEM_NAME } from "@/lib/constants";
 
 async function getOrCreateOpeningBalanceItem(tx: Prisma.TransactionClient) {
   let item = await tx.inventoryItem.findUnique({ where: { name: OPENING_BALANCE_ITEM_NAME } });
@@ -43,6 +35,9 @@ export async function getClient(id: string) {
     where: { id },
   });
 }
+
+import { logAction } from "./audit";
+import { revalidateAll } from "@/lib/revalidate";
 
 export async function createClient(data: unknown) {
   const parsed = ClientSchema.parse(data);
@@ -84,18 +79,32 @@ export async function createClient(data: unknown) {
           freebieFor: "Начальный долг", // marker to identify opening balance items
         },
       });
-      // No StockMovement, no InventoryItem.quantity update — intentional.
-      // No FinanceEntry because no cash was received (debt only).
     });
   }
 
-  safeRevalidate("/debts");
-  safeRevalidate("/sales");
+  await logAction({
+    action: "CREATE",
+    entity: "Client",
+    entityId: client.id,
+    description: `Создан клиент: ${client.name}`,
+    snapshot: {
+      id: client.id,
+      name: client.name,
+      phone: client.phone,
+      address: client.address,
+      district: client.district,
+      visitFrequency: client.visitFrequency,
+    },
+  });
+
+  revalidateAll();
   return client;
 }
 
 export async function updateClient(id: string, data: unknown) {
   const parsed = ClientSchema.parse(data);
+  const oldClient = await prisma.client.findUnique({ where: { id } });
+
   const client = await prisma.client.update({
     where: { id },
     data: {
@@ -108,9 +117,68 @@ export async function updateClient(id: string, data: unknown) {
         : null,
     },
   });
-  safeRevalidate("/debts");
+
+  await logAction({
+    action: "UPDATE",
+    entity: "Client",
+    entityId: client.id,
+    description: `Изменен клиент: ${client.name}`,
+    snapshot: {
+      previous: oldClient
+        ? {
+            name: oldClient.name,
+            phone: oldClient.phone,
+            address: oldClient.address,
+            district: oldClient.district,
+            visitFrequency: oldClient.visitFrequency,
+          }
+        : null,
+    },
+  });
+
+  revalidateAll();
   return client;
 }
+
+export async function deleteClient(id: string) {
+  const client = await prisma.client.findUnique({ where: { id } });
+  if (!client) throw new Error("Клиент не найден");
+
+  // Check transaction history: Sales, Payments, FinanceEntries
+  const [salesCount, paymentsCount, financeCount] = await Promise.all([
+    prisma.sale.count({ where: { clientId: id } }),
+    prisma.payment.count({ where: { clientId: id } }),
+    prisma.financeEntry.count({ where: { relatedClientId: id } }),
+  ]);
+
+  if (salesCount > 0 || paymentsCount > 0 || financeCount > 0) {
+    throw new Error(
+      "У клиента есть история операций (продажи, оплаты или финансы). Удаление невозможно."
+    );
+  }
+
+  await prisma.client.delete({ where: { id } });
+
+  await logAction({
+    action: "DELETE",
+    entity: "Client",
+    entityId: id,
+    description: `Удален клиент: ${client.name}`,
+    snapshot: {
+      deletedRecord: {
+        id: client.id,
+        name: client.name,
+        phone: client.phone,
+        address: client.address,
+        district: client.district,
+        visitFrequency: client.visitFrequency,
+      },
+    },
+  });
+
+  revalidateAll();
+}
+
 
 /**
  * Get all clients with their computed debt, last sale date,

@@ -2,15 +2,10 @@
 
 import { prisma } from "@/lib/db";
 import { SaleFormSchema } from "@/lib/validations";
-import { revalidatePath } from "next/cache";
+import { revalidateAll } from "@/lib/revalidate";
 import { Prisma } from "@prisma/client";
 import { logAction } from "./audit";
-
-function safeRevalidate(path: string) {
-  try {
-    revalidatePath(path);
-  } catch {}
-}
+import { REAL_ITEMS_FILTER } from "@/lib/constants";
 
 export async function getSales() {
   return prisma.sale.findMany({
@@ -38,8 +33,7 @@ export async function getProducts() {
   return prisma.inventoryItem.findMany({
     where: {
       category: "FINISHED_GOOD",
-      isSystem: false,
-      NOT: { name: "__OPENING_BALANCE__" },
+      ...REAL_ITEMS_FILTER,
     },
     orderBy: { name: "asc" },
   });
@@ -48,7 +42,7 @@ export async function getProducts() {
 /**
  * Create a sale with all cascading effects:
  * - SaleItems
- * - StockMovements (SALE_OUT for sale, RETURN_IN for return)
+ * - StockMovements (SALE_OUT for sale, RETURN_IN for return) with recipient name in note
  * - FinanceEntry if payment > 0
  * - Update InventoryItem quantities
  */
@@ -57,6 +51,10 @@ export async function createSale(data: unknown) {
   const isSale = parsed.type === "SALE";
 
   const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const client = await tx.client.findUnique({
+      where: { id: parsed.clientId },
+    });
+
     // Create the sale
     const sale = await tx.sale.create({
       data: {
@@ -99,7 +97,6 @@ export async function createSale(data: unknown) {
 
       // Stock movement
       const movementType = isSale ? "SALE_OUT" : "RETURN_IN";
-      // SALE_OUT is negative quantity, RETURN_IN is positive
       const movementQty = isSale
         ? -Math.abs(Number(item.quantity))
         : Math.abs(Number(item.quantity));
@@ -110,7 +107,7 @@ export async function createSale(data: unknown) {
           type: movementType,
           quantity: new Prisma.Decimal(movementQty),
           date: new Date(parsed.date),
-          note: `${isSale ? "Продажа" : "Возврат"} #${sale.id.slice(-6)}`,
+          note: `${isSale ? "Продажа" : "Возврат"} #${sale.id.slice(-6)} — ${client?.name || "клиент"}`,
         },
       });
 
@@ -127,10 +124,6 @@ export async function createSale(data: unknown) {
 
     // Finance entry if payment > 0
     if (Number(parsed.payment) > 0) {
-      const client = await tx.client.findUnique({
-        where: { id: parsed.clientId },
-      });
-
       await tx.financeEntry.create({
         data: {
           date: new Date(parsed.date),
@@ -144,22 +137,26 @@ export async function createSale(data: unknown) {
       });
     }
 
-    return sale;
+    return { sale, clientName: client?.name };
   });
 
   await logAction({
     action: "CREATE",
     entity: "Sale",
-    entityId: result.id,
-    description: `${parsed.type === "SALE" ? "Продажа" : "Возврат"} на ${parsed.items.length} поз., оплата: ${parsed.payment}`,
+    entityId: result.sale.id,
+    description: `${parsed.type === "SALE" ? "Продажа" : "Возврат"} клиенту "${result.clientName || "клиент"}" на ${parsed.items.length} поз., оплата: ${parsed.payment}`,
+    snapshot: {
+      id: result.sale.id,
+      clientId: parsed.clientId,
+      type: parsed.type,
+      date: parsed.date,
+      payment: parsed.payment,
+      items: parsed.items,
+    },
   });
 
-  safeRevalidate("/sales");
-  safeRevalidate("/debts");
-  safeRevalidate("/finance");
-  safeRevalidate("/warehouse");
-  safeRevalidate("/report");
-  return result;
+  revalidateAll();
+  return result.sale;
 }
 
 /**
@@ -170,6 +167,8 @@ export async function createSale(data: unknown) {
  */
 export async function deleteSale(id: string) {
   let saleType = "SALE";
+  let saleClientId = "";
+
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const sale = await tx.sale.findUnique({
       where: { id },
@@ -178,12 +177,12 @@ export async function deleteSale(id: string) {
 
     if (!sale) throw new Error("Продажа не найдена");
     saleType = sale.type;
+    saleClientId = sale.clientId;
 
     const isSale = sale.type === "SALE";
 
-    // Reverse inventory changes
+    // Reverse inventory quantities
     for (const item of sale.items) {
-      // Reverse: if it was SALE_OUT (-qty), we add it back
       const reverseQty = isSale
         ? Math.abs(Number(item.quantity))
         : -Math.abs(Number(item.quantity));
@@ -226,11 +225,7 @@ export async function deleteSale(id: string) {
     description: `Удалена ${saleType === "SALE" ? "продажа" : "возврат"} #${id.slice(-6)}`,
   });
 
-  safeRevalidate("/sales");
-  safeRevalidate("/debts");
-  safeRevalidate("/finance");
-  safeRevalidate("/warehouse");
-  safeRevalidate("/report");
+  revalidateAll();
 }
 
 /**
@@ -240,7 +235,6 @@ export async function updateSale(id: string, data: unknown) {
   const parsed = SaleFormSchema.parse(data);
 
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    // 1. Get old sale and reverse its effects
     const oldSale = await tx.sale.findUnique({
       where: { id },
       include: { items: true },
@@ -248,11 +242,15 @@ export async function updateSale(id: string, data: unknown) {
 
     if (!oldSale) throw new Error("Продажа не найдена");
 
-    const wasIsSale = oldSale.type === "SALE";
+    const client = await tx.client.findUnique({
+      where: { id: parsed.clientId },
+    });
 
-    // Reverse old inventory changes
+    const oldIsSale = oldSale.type === "SALE";
+
+    // Reverse old inventory effects
     for (const item of oldSale.items) {
-      const reverseQty = wasIsSale
+      const reverseQty = oldIsSale
         ? Math.abs(Number(item.quantity))
         : -Math.abs(Number(item.quantity));
 
@@ -264,24 +262,18 @@ export async function updateSale(id: string, data: unknown) {
       });
     }
 
-    // Delete old stock movements
+    // Delete old stock movements and finance entries
     await tx.stockMovement.deleteMany({
-      where: { note: { contains: oldSale.id.slice(-6) } },
+      where: { note: { contains: id.slice(-6) } },
     });
-
-    // Delete old finance entries
     await tx.financeEntry.deleteMany({
       where: { relatedSaleId: id },
     });
-
-    // Delete old sale items
     await tx.saleItem.deleteMany({
       where: { saleId: id },
     });
 
-    // 2. Update the sale record
-    const isSale = parsed.type === "SALE";
-
+    // Update sale record
     await tx.sale.update({
       where: { id },
       data: {
@@ -292,8 +284,21 @@ export async function updateSale(id: string, data: unknown) {
       },
     });
 
-    // 3. Apply new effects
+    const isSale = parsed.type === "SALE";
+
+    // Apply new items and movements
     for (const item of parsed.items) {
+      const product = await tx.inventoryItem.findUnique({
+        where: { id: item.productId },
+      });
+      if (!product) throw new Error("Товар не найден");
+
+      if (isSale && Number(product.quantity) < Number(item.quantity)) {
+        throw new Error(
+          `Недостаточно товара "${product.name}": на складе ${product.quantity} ${product.unit}, запрошено ${item.quantity}`
+        );
+      }
+
       const unitPrice = item.isFreebie ? "0" : item.unitPrice;
       const lineTotal = item.isFreebie
         ? "0"
@@ -321,7 +326,7 @@ export async function updateSale(id: string, data: unknown) {
           type: isSale ? "SALE_OUT" : "RETURN_IN",
           quantity: new Prisma.Decimal(movementQty),
           date: new Date(parsed.date),
-          note: `${isSale ? "Продажа" : "Возврат"} #${id.slice(-6)}`,
+          note: `${isSale ? "Продажа" : "Возврат"} #${id.slice(-6)} — ${client?.name || "клиент"}`,
         },
       });
 
@@ -334,9 +339,6 @@ export async function updateSale(id: string, data: unknown) {
     }
 
     if (Number(parsed.payment) > 0) {
-      const client = await tx.client.findUnique({
-        where: { id: parsed.clientId },
-      });
       await tx.financeEntry.create({
         data: {
           date: new Date(parsed.date),
@@ -358,9 +360,5 @@ export async function updateSale(id: string, data: unknown) {
     description: `Изменена ${parsed.type === "SALE" ? "продажа" : "возврат"} #${id.slice(-6)}`,
   });
 
-  safeRevalidate("/sales");
-  safeRevalidate("/debts");
-  safeRevalidate("/finance");
-  safeRevalidate("/warehouse");
-  safeRevalidate("/report");
+  revalidateAll();
 }

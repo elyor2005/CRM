@@ -1,8 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/db";
-
-const OPENING_BALANCE_ITEM_NAME = "__OPENING_BALANCE__";
+import { REAL_ITEMS_FILTER, OPENING_BALANCE_ITEM_NAME, isRealItem } from "@/lib/constants";
 
 /**
  * Get all dashboard data in a single parallel call for maximum performance.
@@ -127,10 +126,7 @@ export async function getDashboardData(options?: DashboardOptions) {
       _sum: { amount: true },
     }),
     prisma.inventoryItem.findMany({
-      where: {
-        isSystem: false,
-        NOT: { name: OPENING_BALANCE_ITEM_NAME },
-      },
+      where: REAL_ITEMS_FILTER,
       include: asOf ? { stockMovements: true } : undefined,
     }),
     prisma.client.findMany({
@@ -247,24 +243,12 @@ export async function getDashboardData(options?: DashboardOptions) {
   // Finished goods value at SALE PRICE
   let finishedGoodsSaleValue = 0;
   for (const item of allItems) {
-    if (item.category === "FINISHED_GOOD" && item.name !== OPENING_BALANCE_ITEM_NAME) {
+    if (item.category === "FINISHED_GOOD" && isRealItem(item)) {
       let qty = Number(item.quantity);
       if (asOf && "stockMovements" in item && Array.isArray((item as any).stockMovements)) {
         for (const mov of (item as any).stockMovements) {
           if (new Date(mov.date) > asOf) {
-            const mQty = Number(mov.quantity);
-            if (mov.type === "PRODUCTION_IN" || mov.type === "RETURN_IN") {
-              qty -= mQty;
-            } else if (
-              mov.type === "SALE_OUT" ||
-              mov.type === "DEFECT" ||
-              mov.type === "BONUS" ||
-              mov.type === "PRODUCTION_CONSUME"
-            ) {
-              qty += mQty;
-            } else if (mov.type === "ADJUSTMENT") {
-              qty -= mQty;
-            }
+            qty -= Number(mov.quantity);
           }
         }
         if (qty < 0) qty = 0;
@@ -299,7 +283,7 @@ export async function getDashboardData(options?: DashboardOptions) {
 
   // Alerts
   const lowStockItems = allItems.filter(
-    (item) => item.name !== OPENING_BALANCE_ITEM_NAME && Number(item.minStock) > 0 && Number(item.quantity) < Number(item.minStock)
+    (item) => isRealItem(item) && Number(item.minStock) > 0 && Number(item.quantity) < Number(item.minStock)
   );
 
   const debtClients: { id: string; name: string; debt: number }[] = [];

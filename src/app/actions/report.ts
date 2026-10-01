@@ -1,19 +1,15 @@
 "use server";
 
 import { prisma } from "@/lib/db";
-import { LiabilityEntrySchema } from "@/lib/validations";
-import { revalidatePath } from "next/cache";
+import { LiabilityEntrySchema, AssetEntrySchema } from "@/lib/validations";
+import { revalidateAll } from "@/lib/revalidate";
 import { Prisma } from "@prisma/client";
-
-function safeRevalidate(path: string) {
-  try {
-    revalidatePath(path);
-  } catch {}
-}
+import { logAction } from "./audit";
+import { REAL_ITEMS_FILTER } from "@/lib/constants";
 
 /**
- * Get the full balance report data with historical date snapshot reconstruction (Task Group 8a).
- * DEBIT: inventory value by category + cash balance + client debts
+ * Get the full balance report data with historical date snapshot reconstruction.
+ * DEBIT: inventory value (Finished Goods at SALE PRICE, raw/pkg at cost) + cash balance + client receivables + manual assets
  * CREDIT: manual liability entries
  */
 export async function getBalanceReport(options?: { asOfDate?: string }) {
@@ -24,10 +20,10 @@ export async function getBalanceReport(options?: { asOfDate?: string }) {
 
   const dateFilter = asOf ? { lte: asOf } : undefined;
 
-  // Single parallel batch for all 5 independent queries
+  // Single parallel batch for independent queries
   const [items, income, expense, clients, liabilities] = await Promise.all([
     prisma.inventoryItem.findMany({
-      where: { NOT: { name: "__OPENING_BALANCE__" } },
+      where: REAL_ITEMS_FILTER,
       include: asOf ? { stockMovements: true } : undefined,
     }),
     prisma.financeEntry.aggregate({
@@ -61,7 +57,20 @@ export async function getBalanceReport(options?: { asOfDate?: string }) {
     }),
   ]);
 
-  // Inventory value by category (reconstructed as of date if specified)
+  // Query AssetEntry with safe fallback if table is not yet migrated
+  let assetEntries: any[] = [];
+  try {
+    assetEntries = await prisma.assetEntry.findMany({
+      where: dateFilter ? { date: dateFilter } : undefined,
+      orderBy: { date: "desc" },
+    });
+  } catch (e) {
+    console.warn("AssetEntry query fallback (table may not be created yet):", e);
+  }
+
+  // Inventory value by category:
+  // Finished Goods valued at SALE PRICE (Part 2 Item E policy change)
+  // Raw materials and Packaging valued at COST PRICE
   const inventoryByCategory: Record<string, number> = {
     FINISHED_GOOD: 0,
     RAW_MATERIAL: 0,
@@ -79,27 +88,20 @@ export async function getBalanceReport(options?: { asOfDate?: string }) {
       }>;
       for (const mov of movements) {
         if (new Date(mov.date) > asOf) {
-          const mQty = Number(mov.quantity);
-          if (mov.type === "PRODUCTION_IN" || mov.type === "RETURN_IN") {
-            effectiveQty -= mQty;
-          } else if (
-            mov.type === "SALE_OUT" ||
-            mov.type === "DEFECT" ||
-            mov.type === "BONUS" ||
-            mov.type === "PRODUCTION_CONSUME"
-          ) {
-            effectiveQty += mQty;
-          } else if (mov.type === "ADJUSTMENT") {
-            effectiveQty -= mQty;
-          }
+          effectiveQty -= Number(mov.quantity);
         }
       }
       if (effectiveQty < 0) effectiveQty = 0;
     }
 
+    const unitPrice =
+      item.category === "FINISHED_GOOD"
+        ? (item.salePrice ? Number(item.salePrice) : Number(item.costPrice))
+        : Number(item.costPrice);
+
     inventoryByCategory[item.category] =
       (inventoryByCategory[item.category] || 0) +
-      effectiveQty * Number(item.costPrice);
+      effectiveQty * unitPrice;
   }
 
   // Cash balance
@@ -139,12 +141,18 @@ export async function getBalanceReport(options?: { asOfDate?: string }) {
     0
   );
 
+  const totalAssets = assetEntries.reduce(
+    (sum, a) => sum + Number(a.amount),
+    0
+  );
+
   const debitTotal =
     inventoryByCategory.FINISHED_GOOD +
     inventoryByCategory.RAW_MATERIAL +
     inventoryByCategory.PACKAGING +
     cashBalance +
-    totalReceivables;
+    totalReceivables +
+    totalAssets;
 
   const creditTotal = totalLiabilities;
 
@@ -155,6 +163,8 @@ export async function getBalanceReport(options?: { asOfDate?: string }) {
       packaging: inventoryByCategory.PACKAGING,
       cash: cashBalance,
       receivables: totalReceivables,
+      assets: assetEntries,
+      assetsTotal: totalAssets,
       total: debitTotal,
     },
     credit: {
@@ -165,10 +175,12 @@ export async function getBalanceReport(options?: { asOfDate?: string }) {
   };
 }
 
+// ─── Liability Entries ────────────────────────────────────────────────────────
+
 export async function createLiabilityEntry(data: unknown) {
   const parsed = LiabilityEntrySchema.parse(data);
 
-  await prisma.liabilityEntry.create({
+  const entry = await prisma.liabilityEntry.create({
     data: {
       name: parsed.name,
       amount: new Prisma.Decimal(parsed.amount),
@@ -176,15 +188,28 @@ export async function createLiabilityEntry(data: unknown) {
     },
   });
 
-  safeRevalidate("/report");
-  safeRevalidate("/liabilities");
-  safeRevalidate("/dashboard");
+  await logAction({
+    action: "CREATE",
+    entity: "LiabilityEntry",
+    entityId: entry.id,
+    description: `Добавлено обязательство: ${parsed.name} — ${parsed.amount}`,
+    snapshot: {
+      id: entry.id,
+      name: entry.name,
+      amount: Number(entry.amount),
+      date: entry.date,
+    },
+  });
+
+  revalidateAll();
+  return entry;
 }
 
 export async function updateLiabilityEntry(id: string, data: unknown) {
   const parsed = LiabilityEntrySchema.parse(data);
+  const old = await prisma.liabilityEntry.findUnique({ where: { id } });
 
-  await prisma.liabilityEntry.update({
+  const entry = await prisma.liabilityEntry.update({
     where: { id },
     data: {
       name: parsed.name,
@@ -193,14 +218,115 @@ export async function updateLiabilityEntry(id: string, data: unknown) {
     },
   });
 
-  safeRevalidate("/report");
-  safeRevalidate("/liabilities");
-  safeRevalidate("/dashboard");
+  await logAction({
+    action: "UPDATE",
+    entity: "LiabilityEntry",
+    entityId: id,
+    description: `Обновлено обязательство: ${parsed.name} — ${parsed.amount}`,
+    snapshot: {
+      previous: old
+        ? { id: old.id, name: old.name, amount: Number(old.amount), date: old.date }
+        : null,
+    },
+  });
+
+  revalidateAll();
+  return entry;
 }
 
 export async function deleteLiabilityEntry(id: string) {
+  const old = await prisma.liabilityEntry.findUnique({ where: { id } });
   await prisma.liabilityEntry.delete({ where: { id } });
-  safeRevalidate("/report");
-  safeRevalidate("/liabilities");
-  safeRevalidate("/dashboard");
+
+  await logAction({
+    action: "DELETE",
+    entity: "LiabilityEntry",
+    entityId: id,
+    description: `Удалено обязательство: ${old?.name || id}`,
+    snapshot: {
+      deletedRecord: old
+        ? { id: old.id, name: old.name, amount: Number(old.amount), date: old.date }
+        : null,
+    },
+  });
+
+  revalidateAll();
+}
+
+// ─── Manual Asset Entries (Part 2 Item F) ────────────────────────────────────
+
+export async function createAssetEntry(data: unknown) {
+  const parsed = AssetEntrySchema.parse(data);
+
+  const entry = await prisma.assetEntry.create({
+    data: {
+      name: parsed.name,
+      amount: new Prisma.Decimal(parsed.amount),
+      date: new Date(parsed.date),
+    },
+  });
+
+  await logAction({
+    action: "CREATE",
+    entity: "AssetEntry",
+    entityId: entry.id,
+    description: `Добавлен актив: ${parsed.name} — ${parsed.amount}`,
+    snapshot: {
+      id: entry.id,
+      name: entry.name,
+      amount: Number(entry.amount),
+      date: entry.date,
+    },
+  });
+
+  revalidateAll();
+  return entry;
+}
+
+export async function updateAssetEntry(id: string, data: unknown) {
+  const parsed = AssetEntrySchema.parse(data);
+  const old = await prisma.assetEntry.findUnique({ where: { id } });
+
+  const entry = await prisma.assetEntry.update({
+    where: { id },
+    data: {
+      name: parsed.name,
+      amount: new Prisma.Decimal(parsed.amount),
+      date: new Date(parsed.date),
+    },
+  });
+
+  await logAction({
+    action: "UPDATE",
+    entity: "AssetEntry",
+    entityId: id,
+    description: `Обновлен актив: ${parsed.name} — ${parsed.amount}`,
+    snapshot: {
+      previous: old
+        ? { id: old.id, name: old.name, amount: Number(old.amount), date: old.date }
+        : null,
+    },
+  });
+
+  revalidateAll();
+  return entry;
+}
+
+export async function deleteAssetEntry(id: string) {
+  const old = await prisma.assetEntry.findUnique({ where: { id } });
+  await prisma.assetEntry.delete({ where: { id } });
+
+  await logAction({
+    action: "DELETE",
+    entity: "AssetEntry",
+    entityId: id,
+    description: `Удален актив: ${old?.name || id}`,
+    snapshot: {
+      deletedRecord: old
+        ? { id: old.id, name: old.name, amount: Number(old.amount), date: old.date }
+        : null,
+    },
+  });
+
+  revalidateAll();
 }

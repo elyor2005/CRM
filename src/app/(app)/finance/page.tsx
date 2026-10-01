@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useTransition } from "react";
-import { Plus, Wallet, Link as LinkIcon, Trash2, Download } from "lucide-react";
+import { Plus, Wallet, Link as LinkIcon, Trash2, Download, CreditCard } from "lucide-react";
 import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
@@ -12,6 +12,7 @@ import {
   createFinanceEntry,
   deleteFinanceEntry,
   getFinanceSummary,
+  getExpenseCategories,
 } from "@/app/actions/finance";
 import { useLanguage } from "@/lib/i18n/context";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -22,39 +23,19 @@ import { Badge } from "@/components/ui/Badge";
 import { Table, TableRow } from "@/components/ui/Table";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { TableRowSkeleton, CardSkeleton } from "@/components/ui/Skeleton";
-import { PAYMENT_METHODS, EXPENSE_CATEGORIES } from "@/lib/validations";
+import { PAYMENT_METHODS } from "@/lib/validations";
 import { exportToExcel } from "@/lib/exportExcel";
+import { ReceivePaymentModal } from "@/components/payments/ReceivePaymentModal";
+import { DateRangePicker, getDateRange } from "@/components/ui/DateRangePicker";
 import type { FinanceType } from "@prisma/client";
 
 type Entry = Awaited<ReturnType<typeof getFinanceEntries>>[number];
-
-type DatePreset = "ALL" | "TODAY" | "WEEK" | "MONTH" | "CUSTOM";
-
-function getDateRange(preset: DatePreset): { from?: string; to?: string } {
-  const now = new Date();
-  const today = formatDateInput(now);
-  switch (preset) {
-    case "TODAY":
-      return { from: today, to: today };
-    case "WEEK": {
-      const weekAgo = new Date(now);
-      weekAgo.setDate(weekAgo.getDate() - 7);
-      return { from: formatDateInput(weekAgo), to: today };
-    }
-    case "MONTH": {
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      return { from: formatDateInput(monthStart), to: today };
-    }
-    default:
-      return {};
-  }
-}
 
 export default function FinancePage() {
   const { language, t } = useLanguage();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [filter, setFilter] = useState<"ALL" | "INCOME" | "EXPENSE">("ALL");
-  const [datePreset, setDatePreset] = useState<DatePreset>("ALL");
+  const [datePreset, setDatePreset] = useState<string>("ALL");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [summary, setSummary] = useState<{
@@ -63,6 +44,8 @@ export default function FinancePage() {
     balance: number;
     expenseByCategory?: Record<string, number>;
   }>({ totalIncome: 0, totalExpense: 0, balance: 0, expenseByCategory: {} });
+  const [categories, setCategories] = useState<Array<{ id: string; name: string }>>([]);
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -79,18 +62,17 @@ export default function FinancePage() {
 
   const loadData = () => {
     startTransition(async () => {
-      const range =
-        datePreset === "CUSTOM"
-          ? { from: customFrom || undefined, to: customTo || undefined }
-          : getDateRange(datePreset);
+      const range = getDateRange(datePreset, customFrom, customTo);
 
       const filterVal = filter === "ALL" ? undefined : filter;
-      const [e, s] = await Promise.all([
-        getFinanceEntries({ filter: filterVal, dateFrom: range.from, dateTo: range.to }),
-        getFinanceSummary({ dateFrom: range.from, dateTo: range.to }),
+      const [e, s, cats] = await Promise.all([
+        getFinanceEntries({ filter: filterVal, dateFrom: range.from || undefined, dateTo: range.to || undefined }),
+        getFinanceSummary({ dateFrom: range.from || undefined, dateTo: range.to || undefined }),
+        getExpenseCategories(),
       ]);
       setEntries(e);
       setSummary(s);
+      setCategories(cats);
       setLoading(false);
     });
   };
@@ -215,6 +197,15 @@ export default function FinancePage() {
               <span className="text-xs sm:text-sm font-bold">{t("common.exportExcel")}</span>
             </Button>
             <Button
+              variant="secondary"
+              size="md"
+              onClick={() => setPaymentModalOpen(true)}
+              className="min-h-[44px] gap-2 px-3.5 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-900/50 hover:bg-emerald-100 dark:hover:bg-emerald-950/50 shadow-xs"
+            >
+              <CreditCard size={18} />
+              <span className="text-xs sm:text-sm font-bold">{t("debts.addPayment")}</span>
+            </Button>
+            <Button
               onClick={() => {
                 setFormType("EXPENSE");
                 setFormDesc("");
@@ -261,35 +252,16 @@ export default function FinancePage() {
             { value: "EXPENSE", label: t("finance.expense") },
           ]}
         />
-        <SegmentedControl
+        <DateRangePicker
           value={datePreset}
-          onChange={(v) => setDatePreset(v as DatePreset)}
-          options={[
-            { value: "ALL", label: t("common.all") },
-            { value: "TODAY", label: t("common.today") },
-            { value: "WEEK", label: t("common.thisWeek") },
-            { value: "MONTH", label: t("common.thisMonth") },
-            { value: "CUSTOM", label: t("common.custom") },
-          ]}
+          onChange={setDatePreset}
+          presets={["ALL", "TODAY", "7D", "30D", "MONTH", "CUSTOM"]}
+          customFrom={customFrom}
+          customTo={customTo}
+          onCustomFromChange={setCustomFrom}
+          onCustomToChange={setCustomTo}
         />
       </div>
-
-      {datePreset === "CUSTOM" && (
-        <div className="grid grid-cols-2 gap-3 max-w-md">
-          <Input
-            label={t("common.from")}
-            type="date"
-            value={customFrom}
-            onChange={(e) => setCustomFrom(e.target.value)}
-          />
-          <Input
-            label={t("common.to")}
-            type="date"
-            value={customTo}
-            onChange={(e) => setCustomTo(e.target.value)}
-          />
-        </div>
-      )}
 
       {/* Task Group 4: Расходы по категориям breakdown */}
       {filter !== "INCOME" && expenseCategoriesList.length > 0 && (
@@ -451,9 +423,9 @@ export default function FinancePage() {
                 onChange={(e) => setFormCategory(e.target.value)}
               >
                 <option value="">{t("common.select")}...</option>
-                {EXPENSE_CATEGORIES.map((cat) => (
-                  <option key={cat} value={cat}>
-                    {t(`expenseCategories.${cat}`)}
+                {categories.map((cat) => (
+                  <option key={cat.id} value={cat.name}>
+                    {cat.name}
                   </option>
                 ))}
               </select>
@@ -499,6 +471,13 @@ export default function FinancePage() {
         destructive
         onConfirm={handleDelete}
         onCancel={() => setDeleteId(null)}
+      />
+
+      {/* Receive Payment Modal */}
+      <ReceivePaymentModal
+        open={paymentModalOpen}
+        onClose={() => setPaymentModalOpen(false)}
+        onSuccess={() => loadData()}
       />
     </div>
   );

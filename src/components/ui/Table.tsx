@@ -7,6 +7,7 @@ interface TableProps {
   children: React.ReactNode;
   alignments?: ("left" | "right" | "center")[];
   className?: string;
+  minWidth?: string;
 }
 
 export function Table({
@@ -14,14 +15,15 @@ export function Table({
   children,
   alignments = [],
   className = "",
+  minWidth = "min-w-[600px]",
 }: TableProps) {
   return (
     <div className={`relative w-full overflow-hidden rounded-2xl border border-gray-200/80 dark:border-zinc-800 bg-white dark:bg-[#131823] shadow-xs ${className}`}>
       {/* Scrollable Container with Subtle Scroll Hint */}
       <div className="w-full overflow-x-auto scrollbar-thin">
-        <table className="w-full text-left text-sm border-collapse min-w-[600px] md:min-w-full">
-          <thead>
-            <tr className="border-b border-gray-100 dark:border-zinc-800/80 bg-gray-50/70 dark:bg-[#182030]/60 text-xs uppercase font-bold text-gray-500 dark:text-zinc-400 tracking-wider">
+        <table className={`w-full text-left text-sm border-collapse ${minWidth} md:min-w-full`}>
+          <thead className="sticky top-0 z-10 bg-gray-50/95 dark:bg-[#182030]/95 backdrop-blur-xs">
+            <tr className="border-b border-gray-100 dark:border-zinc-800/80 text-xs uppercase font-bold text-gray-500 dark:text-zinc-400 tracking-wider">
               {headers.map((header, idx) => {
                 const align = alignments[idx] || "left";
                 const alignClass =

@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Users, Search, Plus, ArrowUpDown, ArrowUp, ArrowDown, Download } from "lucide-react";
+import { Users, Search, Plus, ArrowUpDown, ArrowUp, ArrowDown, Download, Edit, Trash2 } from "lucide-react";
 import { formatUZS, formatDateShort } from "@/lib/format";
-import { getClientsWithDebt } from "@/app/actions/clients";
+import { getClientsWithDebt, createClient, updateClient, deleteClient } from "@/app/actions/clients";
 import { useLanguage } from "@/lib/i18n/context";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Badge } from "@/components/ui/Badge";
@@ -15,7 +15,6 @@ import { Button } from "@/components/ui/Button";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { Input } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Toast";
-import { createClient } from "@/app/actions/clients";
 import { formatDateInput } from "@/lib/format";
 import { exportToExcel } from "@/lib/exportExcel";
 
@@ -140,6 +139,59 @@ export default function DebtsPage() {
     });
   };
 
+  // Edit client state (Part 1 Item 2)
+  const [editClientSheet, setEditClientSheet] = useState(false);
+  const [editingClient, setEditingClient] = useState<ClientWithDebt | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editDistrict, setEditDistrict] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [editAddress, setEditAddress] = useState("");
+  const [editVisitFrequency, setEditVisitFrequency] = useState("");
+
+  const startEditClient = (c: ClientWithDebt) => {
+    setEditingClient(c);
+    setEditName(c.name);
+    setEditDistrict(c.district || "");
+    setEditPhone(c.phone || "");
+    setEditAddress(c.address || "");
+    setEditVisitFrequency(c.visitFrequency ? String(c.visitFrequency) : "");
+    setEditClientSheet(true);
+  };
+
+  const handleUpdateClient = () => {
+    if (!editingClient || !editName.trim()) return;
+    startTransition(async () => {
+      try {
+        await updateClient(editingClient.id, {
+          name: editName.trim(),
+          district: editDistrict.trim(),
+          phone: editPhone.trim(),
+          address: editAddress.trim(),
+          visitFrequency: editVisitFrequency,
+        });
+        showToast("Данные клиента сохранены");
+        setEditClientSheet(false);
+        setEditingClient(null);
+        loadData();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Ошибка", "error");
+      }
+    });
+  };
+
+  const handleDeleteClient = (c: ClientWithDebt) => {
+    if (!confirm(`Вы действительно хотите удалить клиента "${c.name}"?`)) return;
+    startTransition(async () => {
+      try {
+        await deleteClient(c.id);
+        showToast("Клиент удалён");
+        loadData();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Ошибка удаления", "error");
+      }
+    });
+  };
+
   const sortableHeader = (label: string, field: SortField) => (
     <button
       onClick={() => toggleSort(field)}
@@ -250,8 +302,9 @@ export default function DebtsPage() {
             sortableHeader(t("debts.currentDebt"), "debt"),
             sortableHeader(t("debts.lastSale"), "lastSaleDate"),
             sortableHeader(t("common.status"), "status"),
+            "Действия",
           ]}
-          alignments={["left", "left", "right", "right", "right", "right", "center"]}
+          alignments={["left", "left", "right", "right", "right", "right", "center", "center"]}
         >
           {sorted.map((client) => {
             const badge = getDebtBadge(client.debt);
@@ -294,13 +347,31 @@ export default function DebtsPage() {
                 <td className="p-3.5 sm:p-4 text-center">
                   <Badge variant={badge.variant}>{badge.label}</Badge>
                 </td>
+                <td className="p-3.5 sm:p-4 text-center" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-center gap-1.5">
+                    <button
+                      onClick={() => startEditClient(client)}
+                      className="p-1.5 rounded-lg bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-300 hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors"
+                      title="Редактировать"
+                    >
+                      <Edit size={14} />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteClient(client)}
+                      className="p-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/60 transition-colors"
+                      title="Удалить"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </td>
               </TableRow>
             );
           })}
         </Table>
       )}
 
-      {/* New Client ModalSheet (Task Group 6 — full client creation) */}
+      {/* New Client ModalSheet */}
       <ModalSheet
         open={newClientSheet}
         onClose={() => setNewClientSheet(false)}
@@ -349,6 +420,59 @@ export default function DebtsPage() {
             placeholder="0"
           />
           <Button onClick={handleAddClient} loading={isPending} size="lg">
+            {t("common.save")}
+          </Button>
+        </div>
+      </ModalSheet>
+
+      {/* Edit Client ModalSheet (Part 1 Item 2) */}
+      <ModalSheet
+        open={editClientSheet}
+        onClose={() => setEditClientSheet(false)}
+        title="Редактировать клиента"
+      >
+        <div className="flex flex-col gap-4">
+          <Input
+            label={t("common.name")}
+            value={editName}
+            onChange={(e) => setEditName(e.target.value)}
+            placeholder="Имя клиента"
+            autoFocus
+          />
+          <Input
+            label={t("common.district")}
+            value={editDistrict}
+            onChange={(e) => setEditDistrict(e.target.value)}
+            placeholder="Район"
+          />
+          <Input
+            label={t("common.phone")}
+            value={editPhone}
+            onChange={(e) => setEditPhone(e.target.value)}
+            placeholder="+998 90 123 45 67"
+          />
+          <Input
+            label={t("common.address")}
+            value={editAddress}
+            onChange={(e) => setEditAddress(e.target.value)}
+            placeholder="Адрес"
+          />
+          <Input
+            label={t("common.visitFrequency")}
+            type="number"
+            min="1"
+            value={editVisitFrequency}
+            onChange={(e) => setEditVisitFrequency(e.target.value)}
+            placeholder="7"
+          />
+          <Button
+            type="button"
+            variant="primary"
+            size="lg"
+            onClick={handleUpdateClient}
+            disabled={!editName.trim()}
+            loading={isPending}
+          >
             {t("common.save")}
           </Button>
         </div>

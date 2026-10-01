@@ -2,12 +2,11 @@
 
 import { useState, useEffect, useTransition } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Plus } from "lucide-react";
+import { ArrowLeft, Plus, Edit, Trash2 } from "lucide-react";
 import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { useToast } from "@/components/ui/Toast";
-import { getClient, getClientHistory, getClientDetailedStats } from "@/app/actions/clients";
-import { createPayment } from "@/app/actions/payments";
+import { getClient, getClientHistory, getClientDetailedStats, updateClient, deleteClient } from "@/app/actions/clients";
 import { useLanguage } from "@/lib/i18n/context";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
@@ -17,7 +16,8 @@ import { Badge } from "@/components/ui/Badge";
 import { Table, TableRow } from "@/components/ui/Table";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { TableRowSkeleton, CardSkeleton } from "@/components/ui/Skeleton";
-import { PAYMENT_METHODS } from "@/lib/validations";
+import { SaleDetailModal } from "@/components/sales/SaleDetailModal";
+import { ReceivePaymentModal } from "@/components/payments/ReceivePaymentModal";
 
 type ClientType = NonNullable<Awaited<ReturnType<typeof getClient>>>;
 type HistoryType = Awaited<ReturnType<typeof getClientHistory>>;
@@ -31,13 +31,18 @@ export default function ClientDetailPage() {
   const [client, setClient] = useState<ClientType | null>(null);
   const [history, setHistory] = useState<HistoryType | null>(null);
   const [stats, setStats] = useState<StatsType | null>(null);
+  const [selectedSale, setSelectedSale] = useState<HistoryType["sales"][number] | null>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
-  const [paymentAmount, setPaymentAmount] = useState("");
-  const [paymentDate, setPaymentDate] = useState(formatDateInput(new Date()));
-  const [paymentNote, setPaymentNote] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState("CASH");
   const [isPending, startTransition] = useTransition();
   const { showToast } = useToast();
+
+  // Edit client state
+  const [editClientOpen, setEditClientOpen] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editDistrict, setEditDistrict] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [editAddress, setEditAddress] = useState("");
+  const [editVisitFrequency, setEditVisitFrequency] = useState("");
 
   const loadData = () => {
     startTransition(async () => {
@@ -56,25 +61,45 @@ export default function ClientDetailPage() {
     loadData();
   }, [clientId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handlePayment = () => {
-    if (!paymentAmount || Number(paymentAmount) <= 0) return;
+  const startEditClient = () => {
+    if (!client) return;
+    setEditName(client.name);
+    setEditDistrict(client.district || "");
+    setEditPhone(client.phone || "");
+    setEditAddress(client.address || "");
+    setEditVisitFrequency(client.visitFrequency ? String(client.visitFrequency) : "");
+    setEditClientOpen(true);
+  };
+
+  const handleUpdateClient = () => {
+    if (!editName.trim()) return;
     startTransition(async () => {
       try {
-        await createPayment({
-          clientId,
-          amount: paymentAmount,
-          date: paymentDate,
-          note: paymentNote,
-          method: paymentMethod as any,
+        await updateClient(clientId, {
+          name: editName.trim(),
+          district: editDistrict.trim(),
+          phone: editPhone.trim(),
+          address: editAddress.trim(),
+          visitFrequency: editVisitFrequency,
         });
-        showToast(t("debts.addPayment"));
-        setPaymentOpen(false);
-        setPaymentAmount("");
-        setPaymentNote("");
-        setPaymentMethod("CASH");
+        showToast("Данные клиента сохранены");
+        setEditClientOpen(false);
         loadData();
       } catch (e) {
-        showToast(e instanceof Error ? e.message : "Error", "error");
+        showToast(e instanceof Error ? e.message : "Ошибка", "error");
+      }
+    });
+  };
+
+  const handleDeleteClient = () => {
+    if (!confirm(`Вы уверены, что хотите удалить клиента "${client?.name}"?`)) return;
+    startTransition(async () => {
+      try {
+        await deleteClient(clientId);
+        showToast("Клиент удалён");
+        router.push("/debts");
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Ошибка удаления", "error");
       }
     });
   };
@@ -114,9 +139,27 @@ export default function ClientDetailPage() {
         title={client.name}
         subtitle={client.phone || client.address || undefined}
         action={
-          <Button onClick={() => setPaymentOpen(true)} size="md">
-            <Plus size={18} /> {t("debts.addPayment")}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="md"
+              onClick={startEditClient}
+              className="gap-1.5"
+            >
+              <Edit size={16} /> Редактировать
+            </Button>
+            <Button
+              variant="destructive"
+              size="md"
+              onClick={handleDeleteClient}
+              className="gap-1.5 bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 border-rose-200 dark:border-rose-900/50"
+            >
+              <Trash2 size={16} /> Удалить
+            </Button>
+            <Button onClick={() => setPaymentOpen(true)} size="md" className="gap-1.5">
+              <Plus size={18} /> {t("debts.addPayment")}
+            </Button>
+          </div>
         }
       />
 
@@ -196,7 +239,11 @@ export default function ClientDetailPage() {
                 const sale = entry.data as HistoryType["sales"][number];
                 const total = sale.items.reduce((s, i) => s + Number(i.lineTotal), 0);
                 return (
-                  <TableRow key={`sale-${idx}`}>
+                  <TableRow
+                    key={`sale-${idx}`}
+                    className="cursor-pointer hover:bg-gray-50/70 dark:hover:bg-zinc-800/50 transition-colors"
+                    onClick={() => setSelectedSale(sale)}
+                  >
                     <td className="p-3.5 whitespace-nowrap text-gray-700 dark:text-zinc-300 font-medium">
                       {formatDateShort(sale.date, language)}
                     </td>
@@ -244,55 +291,69 @@ export default function ClientDetailPage() {
       </section>
 
       {/* Payment Form Modal */}
-      <ModalSheet open={paymentOpen} onClose={() => setPaymentOpen(false)} title={t("debts.newPayment")}>
+      <ReceivePaymentModal
+        open={paymentOpen}
+        onClose={() => setPaymentOpen(false)}
+        preselectedClientId={clientId}
+        onSuccess={loadData}
+      />
+
+      {/* Sale Detail Modal */}
+      <SaleDetailModal
+        sale={selectedSale && client ? { ...selectedSale, client: { id: client.id, name: client.name } } : null}
+        open={!!selectedSale}
+        onClose={() => setSelectedSale(null)}
+      />
+
+      {/* Edit Client Modal */}
+      <ModalSheet
+        open={editClientOpen}
+        onClose={() => setEditClientOpen(false)}
+        title="Редактировать клиента"
+      >
         <div className="flex flex-col gap-4">
           <Input
-            label={t("common.amount")}
-            type="number"
-            step="any"
-            min="0"
-            placeholder="0"
-            value={paymentAmount}
-            onChange={(e) => setPaymentAmount(e.target.value)}
+            label={t("common.name")}
+            value={editName}
+            onChange={(e) => setEditName(e.target.value)}
+            placeholder="Имя клиента"
             autoFocus
           />
           <Input
-            label={t("common.date")}
-            type="date"
-            value={paymentDate}
-            onChange={(e) => setPaymentDate(e.target.value)}
+            label={t("common.district")}
+            value={editDistrict}
+            onChange={(e) => setEditDistrict(e.target.value)}
+            placeholder="Район"
           />
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-zinc-400 pl-0.5">
-              {t("common.method")}
-            </label>
-            <select
-              className="w-full px-4 py-2.5 bg-gray-100 dark:bg-[#1E2638] text-gray-900 dark:text-white rounded-xl text-base border border-gray-200/60 dark:border-zinc-800 outline-none transition-all focus:ring-2 focus:ring-indigo-500/80 min-h-[44px]"
-              value={paymentMethod}
-              onChange={(e) => setPaymentMethod(e.target.value)}
-            >
-              {PAYMENT_METHODS.map((m) => (
-                <option key={m} value={m}>
-                  {t(`paymentMethods.${m}`)}
-                </option>
-              ))}
-            </select>
-          </div>
           <Input
-            label={t("common.notes")}
-            placeholder="..."
-            value={paymentNote}
-            onChange={(e) => setPaymentNote(e.target.value)}
+            label={t("common.phone")}
+            value={editPhone}
+            onChange={(e) => setEditPhone(e.target.value)}
+            placeholder="+998 90 123 45 67"
+          />
+          <Input
+            label={t("common.address")}
+            value={editAddress}
+            onChange={(e) => setEditAddress(e.target.value)}
+            placeholder="Адрес"
+          />
+          <Input
+            label={t("common.visitFrequency")}
+            type="number"
+            min="1"
+            value={editVisitFrequency}
+            onChange={(e) => setEditVisitFrequency(e.target.value)}
+            placeholder="7"
           />
           <Button
             type="button"
             variant="primary"
             size="lg"
-            onClick={handlePayment}
-            disabled={!paymentAmount || Number(paymentAmount) <= 0}
+            onClick={handleUpdateClient}
+            disabled={!editName.trim()}
             loading={isPending}
           >
-            {t("debts.addPayment")}
+            {t("common.save")}
           </Button>
         </div>
       </ModalSheet>

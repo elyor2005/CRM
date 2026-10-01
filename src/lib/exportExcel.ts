@@ -1,16 +1,15 @@
-import * as XLSX from "xlsx";
-
 export interface ExcelSheetData {
   name: string;
   data: (string | number | null | undefined)[][];
 }
 
-export function exportToExcel(filename: string, sheets: ExcelSheetData[]) {
+export async function exportToExcel(filename: string, sheets: ExcelSheetData[]) {
+  const XLSX = await import("xlsx");
   const wb = XLSX.utils.book_new();
 
   for (const sheet of sheets) {
     const ws = XLSX.utils.aoa_to_sheet(sheet.data);
-    
+
     // Auto-fit column widths
     const colWidths = sheet.data.reduce((widths: number[], row) => {
       row.forEach((cell, i) => {

@@ -99,6 +99,7 @@ export type FinanceEntryFormInput = z.infer<typeof FinanceEntryFormSchema>;
 export const ProductionSchema = z.object({
   itemId: z.string().min(1),
   quantity: positiveDecimal,
+  date: z.string().optional(),
 });
 
 export type ProductionInput = z.infer<typeof ProductionSchema>;
@@ -106,6 +107,7 @@ export type ProductionInput = z.infer<typeof ProductionSchema>;
 export const RestockSchema = z.object({
   itemId: z.string().min(1),
   quantity: positiveDecimal,
+  date: z.string().optional(),
 });
 
 export type RestockInput = z.infer<typeof RestockSchema>;
@@ -115,9 +117,21 @@ export const WriteOffSchema = z.object({
   quantity: positiveDecimal,
   reason: z.enum(["DEFECT", "ADJUSTMENT"]),
   note: z.string().max(500).optional().or(z.literal("")),
+  date: z.string().optional(),
 });
 
 export type WriteOffInput = z.infer<typeof WriteOffSchema>;
+
+export const BonusSchema = z.object({
+  itemId: z.string().min(1),
+  quantity: positiveDecimal,
+  recipient: z.string().min(1, "Укажите получателя"),
+  note: z.string().max(500).optional().or(z.literal("")),
+  date: z.string().optional(),
+});
+
+export type BonusInput = z.infer<typeof BonusSchema>;
+
 
 export const RecipeLineSchema = z.object({
   ingredientId: z.string().min(1, "Выберите ингредиент"),
@@ -144,7 +158,7 @@ export const InventoryItemSchema = z.object({
 
 export type InventoryItemInput = z.infer<typeof InventoryItemSchema>;
 
-// ─── Liability ───────────────────────────────────────────────────────────────
+// ─── Liability & Asset Entries ───────────────────────────────────────────────
 
 export const LiabilityEntrySchema = z.object({
   name: z.string().min(1, "Введите название").max(200),
@@ -154,8 +168,17 @@ export const LiabilityEntrySchema = z.object({
 
 export type LiabilityEntryInput = z.infer<typeof LiabilityEntrySchema>;
 
+export const AssetEntrySchema = z.object({
+  name: z.string().min(1, "Введите название").max(200),
+  amount: positiveDecimal,
+  date: z.string().min(1, "Укажите дату"),
+});
+
+export type AssetEntryInput = z.infer<typeof AssetEntrySchema>;
+
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
 export const LoginSchema = z.object({
   pin: z.string().min(1, "Введите PIN-код"),
 });
+

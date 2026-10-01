@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useTransition } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Plus, Minus, Settings } from "lucide-react";
-import { formatUZS, formatDateShort } from "@/lib/format";
+import { ArrowLeft, Plus, Minus, Settings, AlertOctagon, Gift } from "lucide-react";
+import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { SearchableSelect } from "@/components/ui/SearchableSelect";
 import { useToast } from "@/components/ui/Toast";
@@ -12,6 +12,7 @@ import {
   produceItem,
   restockItem,
   writeOffItem,
+  createBonusItem,
   updateRecipe,
   getAllItems,
 } from "@/app/actions/inventory";
@@ -32,7 +33,7 @@ const movementTypeLabels: Record<string, string> = {
   SALE_OUT: "Продажа",
   RETURN_IN: "Возврат",
   DEFECT: "Брак",
-  BONUS: "Бонус",
+  BONUS: "Бонус / Образец",
   ADJUSTMENT: "Корректировка",
 };
 
@@ -48,13 +49,19 @@ export default function WarehouseItemPage() {
   // Sheets
   const [productionOpen, setProductionOpen] = useState(false);
   const [restockOpen, setRestockOpen] = useState(false);
+  const [defectOpen, setDefectOpen] = useState(false);
+  const [bonusOpen, setBonusOpen] = useState(false);
   const [writeOffOpen, setWriteOffOpen] = useState(false);
   const [recipeOpen, setRecipeOpen] = useState(false);
 
   // Form state
   const [qty, setQty] = useState("");
+  const [opDate, setOpDate] = useState(() => formatDateInput(new Date()));
   const [writeOffReason, setWriteOffReason] = useState<"DEFECT" | "ADJUSTMENT">("DEFECT");
   const [writeOffNote, setWriteOffNote] = useState("");
+  const [defectNote, setDefectNote] = useState("");
+  const [bonusRecipient, setBonusRecipient] = useState("");
+  const [bonusNote, setBonusNote] = useState("");
 
   // Recipe editor
   const [recipeLines, setRecipeLines] = useState<{ ingredientId: string; qtyPerUnit: string }[]>([]);
@@ -77,14 +84,23 @@ export default function WarehouseItemPage() {
 
   useEffect(() => { loadData(); }, [itemId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const resetForm = () => {
+    setQty("");
+    setOpDate(formatDateInput(new Date()));
+    setWriteOffNote("");
+    setDefectNote("");
+    setBonusRecipient("");
+    setBonusNote("");
+  };
+
   const handleProduce = () => {
     if (!qty || Number(qty) <= 0) return;
     startTransition(async () => {
       try {
-        await produceItem({ itemId, quantity: qty });
+        await produceItem({ itemId, quantity: qty, date: opDate });
         showToast(`Произведено ${qty} ${item?.unit || "шт"}`);
         setProductionOpen(false);
-        setQty("");
+        resetForm();
         loadData();
       } catch (e) {
         showToast(e instanceof Error ? e.message : "Ошибка", "error");
@@ -96,10 +112,46 @@ export default function WarehouseItemPage() {
     if (!qty || Number(qty) <= 0) return;
     startTransition(async () => {
       try {
-        await restockItem({ itemId, quantity: qty });
+        await restockItem({ itemId, quantity: qty, date: opDate });
         showToast(`Приход: ${qty} ${item?.unit || "шт"}`);
         setRestockOpen(false);
-        setQty("");
+        resetForm();
+        loadData();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Ошибка", "error");
+      }
+    });
+  };
+
+  const handleDefect = () => {
+    if (!qty || Number(qty) <= 0) return;
+    startTransition(async () => {
+      try {
+        await writeOffItem({ itemId, quantity: qty, reason: "DEFECT", note: defectNote || "Брак", date: opDate });
+        showToast(`Списан брак: ${qty} ${item?.unit || "шт"}`);
+        setDefectOpen(false);
+        resetForm();
+        loadData();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Ошибка", "error");
+      }
+    });
+  };
+
+  const handleBonus = () => {
+    if (!qty || Number(qty) <= 0) return;
+    startTransition(async () => {
+      try {
+        await createBonusItem({
+          itemId,
+          quantity: qty,
+          recipient: bonusRecipient,
+          note: bonusNote,
+          date: opDate,
+        });
+        showToast(`Бонус/образец выдан: ${qty} ${item?.unit || "шт"}`);
+        setBonusOpen(false);
+        resetForm();
         loadData();
       } catch (e) {
         showToast(e instanceof Error ? e.message : "Ошибка", "error");
@@ -111,11 +163,10 @@ export default function WarehouseItemPage() {
     if (!qty || Number(qty) <= 0) return;
     startTransition(async () => {
       try {
-        await writeOffItem({ itemId, quantity: qty, reason: writeOffReason, note: writeOffNote });
+        await writeOffItem({ itemId, quantity: qty, reason: writeOffReason, note: writeOffNote, date: opDate });
         showToast("Списание оформлено");
         setWriteOffOpen(false);
-        setQty("");
-        setWriteOffNote("");
+        resetForm();
         loadData();
       } catch (e) {
         showToast(e instanceof Error ? e.message : "Ошибка", "error");
@@ -189,33 +240,55 @@ export default function WarehouseItemPage() {
       </div>
 
       {/* Action Buttons Toolbar */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
         {item.category === "FINISHED_GOOD" && (
           <Button
-            onClick={() => { setQty(""); setProductionOpen(true); }}
+            onClick={() => { resetForm(); setProductionOpen(true); }}
             variant="primary"
+            size="sm"
           >
-            <Plus size={18} /> Производство
+            <Plus size={16} /> Производство
           </Button>
         )}
         <Button
-          onClick={() => { setQty(""); setRestockOpen(true); }}
+          onClick={() => { resetForm(); setRestockOpen(true); }}
           variant="secondary"
+          size="sm"
         >
-          <Plus size={18} /> Приход
+          <Plus size={16} /> Приход
         </Button>
         <Button
-          onClick={() => { setQty(""); setWriteOffNote(""); setWriteOffOpen(true); }}
+          onClick={() => { resetForm(); setDefectOpen(true); }}
           variant="destructive"
+          size="sm"
+          className="bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 border-rose-200 dark:border-rose-900/50"
         >
-          <Minus size={18} /> Списание
+          <AlertOctagon size={16} /> Брак
+        </Button>
+        {item.category === "FINISHED_GOOD" && (
+          <Button
+            onClick={() => { resetForm(); setBonusOpen(true); }}
+            variant="secondary"
+            size="sm"
+            className="bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 border-amber-200 dark:border-amber-900/50"
+          >
+            <Gift size={16} /> Бонус / Образец
+          </Button>
+        )}
+        <Button
+          onClick={() => { resetForm(); setWriteOffOpen(true); }}
+          variant="secondary"
+          size="sm"
+        >
+          <Minus size={16} /> Списание
         </Button>
         {item.category === "FINISHED_GOOD" && (
           <Button
             onClick={() => setRecipeOpen(true)}
             variant="secondary"
+            size="sm"
           >
-            <Settings size={18} /> Рецепт
+            <Settings size={16} /> Рецепт
           </Button>
         )}
       </div>
@@ -280,6 +353,12 @@ export default function WarehouseItemPage() {
             </p>
           )}
           <Input
+            label="Дата операции"
+            type="date"
+            value={opDate}
+            onChange={(e) => setOpDate(e.target.value)}
+          />
+          <Input
             label={`Количество (${item.unit})`}
             type="number"
             step="any"
@@ -333,6 +412,12 @@ export default function WarehouseItemPage() {
       <ModalSheet open={restockOpen} onClose={() => setRestockOpen(false)} title="Приход">
         <div className="flex flex-col gap-4">
           <Input
+            label="Дата операции"
+            type="date"
+            value={opDate}
+            onChange={(e) => setOpDate(e.target.value)}
+          />
+          <Input
             label={`Количество (${item.unit})`}
             type="number"
             step="any"
@@ -355,9 +440,103 @@ export default function WarehouseItemPage() {
         </div>
       </ModalSheet>
 
+      {/* Defect (Брак) Modal Sheet */}
+      <ModalSheet open={defectOpen} onClose={() => setDefectOpen(false)} title="Списание брака">
+        <div className="flex flex-col gap-4">
+          <p className="text-xs text-gray-500 dark:text-zinc-400">
+            Фиксация брака уменьшит остаток товара без начисления долга или выручки.
+          </p>
+          <Input
+            label="Дата операции"
+            type="date"
+            value={opDate}
+            onChange={(e) => setOpDate(e.target.value)}
+          />
+          <Input
+            label={`Количество брака (${item.unit})`}
+            type="number"
+            step="any"
+            min="0"
+            placeholder="0"
+            value={qty}
+            onChange={(e) => setQty(e.target.value)}
+            autoFocus
+          />
+          <Input
+            label="Причина / Примечание"
+            placeholder="Например: повреждение при транспортировке..."
+            value={defectNote}
+            onChange={(e) => setDefectNote(e.target.value)}
+          />
+          <Button
+            type="button"
+            variant="destructive"
+            size="lg"
+            onClick={handleDefect}
+            disabled={!qty || Number(qty) <= 0 || isPending}
+            loading={isPending}
+          >
+            Списать брак
+          </Button>
+        </div>
+      </ModalSheet>
+
+      {/* Bonus / Sample Modal Sheet */}
+      <ModalSheet open={bonusOpen} onClose={() => setBonusOpen(false)} title="Бонус / Образец">
+        <div className="flex flex-col gap-4">
+          <p className="text-xs text-gray-500 dark:text-zinc-400">
+            Выдача бесплатного образца или бонуса уменьшит остаток без изменения долга или кассы. В истории движения сохранится получатель.
+          </p>
+          <Input
+            label="Дата операции"
+            type="date"
+            value={opDate}
+            onChange={(e) => setOpDate(e.target.value)}
+          />
+          <Input
+            label={`Количество (${item.unit})`}
+            type="number"
+            step="any"
+            min="0"
+            placeholder="0"
+            value={qty}
+            onChange={(e) => setQty(e.target.value)}
+            autoFocus
+          />
+          <Input
+            label="Кому (клиент / получатель)"
+            placeholder="Имя клиента, магазина или водителя"
+            value={bonusRecipient}
+            onChange={(e) => setBonusRecipient(e.target.value)}
+          />
+          <Input
+            label="Примечание"
+            placeholder="Необязательно..."
+            value={bonusNote}
+            onChange={(e) => setBonusNote(e.target.value)}
+          />
+          <Button
+            type="button"
+            variant="primary"
+            size="lg"
+            onClick={handleBonus}
+            disabled={!qty || Number(qty) <= 0 || isPending}
+            loading={isPending}
+          >
+            Выдать бонус / образец
+          </Button>
+        </div>
+      </ModalSheet>
+
       {/* Write-off Modal Sheet */}
       <ModalSheet open={writeOffOpen} onClose={() => setWriteOffOpen(false)} title="Списание">
         <div className="flex flex-col gap-4">
+          <Input
+            label="Дата операции"
+            type="date"
+            value={opDate}
+            onChange={(e) => setOpDate(e.target.value)}
+          />
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-zinc-400 pl-0.5">
               Причина

@@ -1,14 +1,16 @@
 "use client";
 
 import { useState, useEffect, useTransition } from "react";
-import { ClipboardList } from "lucide-react";
+import { ClipboardList, RotateCcw } from "lucide-react";
 import { formatDateShort } from "@/lib/format";
-import { getAuditLogs } from "@/app/actions/audit";
+import { getAuditLogs, undoAction } from "@/app/actions/audit";
 import { useLanguage } from "@/lib/i18n/context";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Table, TableRow } from "@/components/ui/Table";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { TableRowSkeleton } from "@/components/ui/Skeleton";
+import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 
 type AuditEntry = Awaited<ReturnType<typeof getAuditLogs>>[number];
 
@@ -26,14 +28,32 @@ export default function AuditPage() {
   const [logs, setLogs] = useState<AuditEntry[]>([]);
   const [isPending, startTransition] = useTransition();
   const [loading, setLoading] = useState(true);
+  const { showToast } = useToast();
 
-  useEffect(() => {
+  const loadData = () => {
     startTransition(async () => {
       const data = await getAuditLogs(200);
       setLogs(data);
       setLoading(false);
     });
+  };
+
+  useEffect(() => {
+    loadData();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleUndo = (log: AuditEntry) => {
+    if (!confirm(`Вы действительно хотите отменить действие: "${log.description}"?`)) return;
+    startTransition(async () => {
+      try {
+        await undoAction(log.id);
+        showToast("Действие успешно отменено");
+        loadData();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Ошибка отмены", "error");
+      }
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -52,12 +72,22 @@ export default function AuditPage() {
         />
       ) : (
         <Table
-          headers={[t("audit.time"), t("audit.action"), t("audit.entity"), t("common.description")]}
-          alignments={["left", "left", "left", "left"]}
+          headers={[
+            t("audit.time"),
+            t("audit.action"),
+            t("audit.entity"),
+            t("common.description"),
+            "Действие",
+          ]}
+          alignments={["left", "left", "left", "left", "center"]}
         >
           {logs.map((log) => {
             const time = new Date(log.createdAt);
             const timeStr = `${time.getHours().toString().padStart(2, "0")}:${time.getMinutes().toString().padStart(2, "0")}`;
+            const canUndo =
+              (log.action === "CREATE" || log.action === "UPDATE" || log.action === "DELETE") &&
+              !log.description.startsWith("Отмена действия");
+
             return (
               <TableRow key={log.id}>
                 <td className="p-3.5 whitespace-nowrap text-gray-700 dark:text-zinc-300 font-medium">
@@ -84,6 +114,22 @@ export default function AuditPage() {
                 </td>
                 <td className="p-3.5 text-gray-900 dark:text-white font-medium">
                   {log.description}
+                </td>
+                <td className="p-3.5 text-center whitespace-nowrap">
+                  {canUndo ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleUndo(log)}
+                      disabled={isPending}
+                      className="h-8 px-2.5 gap-1 text-xs text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-950/40"
+                    >
+                      <RotateCcw size={13} />
+                      <span>Отменить</span>
+                    </Button>
+                  ) : (
+                    <span className="text-xs text-gray-400">—</span>
+                  )}
                 </td>
               </TableRow>
             );
