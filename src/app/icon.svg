@@ -1,0 +1,40 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="80" y1="40" x2="930" y2="980">
+      <stop offset="0%" stop-color="#2563EB"></stop>
+      <stop offset="48%" stop-color="#1D4ED8"></stop>
+      <stop offset="100%" stop-color="#111C72"></stop>
+    </linearGradient>
+
+    <linearGradient id="icon" x1="250" y1="180" x2="780" y2="820">
+      <stop offset="0%" stop-color="#FFFFFF"></stop>
+      <stop offset="50%" stop-color="#D9E8FF"></stop>
+      <stop offset="100%" stop-color="#A5B4FC"></stop>
+    </linearGradient>
+
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="24" stdDeviation="28" flood-opacity="0.28"></feDropShadow>
+    </filter>
+  </defs>
+
+  <!-- App background -->
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="url(#bg)"></rect>
+
+  <!-- Subtle inner highlight -->
+  <rect x="40" y="40" width="944" height="944" rx="212" stroke="white" stroke-opacity="0.10" stroke-width="8"></rect>
+
+  <!-- Package -->
+  <g stroke="url(#icon)" stroke-width="58" stroke-linecap="round" stroke-linejoin="round" filter="url(#shadow)">
+    <!-- Top diamond -->
+    <path d="M270 350L512 220L754 350L512 480L270 350Z"></path>
+
+    <!-- Left side -->
+    <path d="M270 350V650L512 790V480"></path>
+
+    <!-- Right side -->
+    <path d="M754 350V570"></path>
+
+    <!-- Checkmark -->
+    <path d="M650 670L700 720L805 585"></path>
+  </g>
+</svg>

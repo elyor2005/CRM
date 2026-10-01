@@ -5,6 +5,12 @@ import { LanguageProvider } from "@/lib/i18n/context";
 export const metadata: Metadata = {
   title: "CRM — Distribution",
   description: "Mobile-first CRM for wholesale cleaning-chemicals distribution",
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+    ],
+    apple: "/icon.svg",
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",

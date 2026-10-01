@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Users, Search, Plus, ArrowUpDown, ArrowUp, ArrowDown, Download, Edit, Trash2 } from "lucide-react";
 import { formatUZS, formatDateShort } from "@/lib/format";
 import { getClientsWithDebt, createClient, updateClient, deleteClient } from "@/app/actions/clients";
+import { undoAction } from "@/app/actions/audit";
 import { useLanguage } from "@/lib/i18n/context";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Badge } from "@/components/ui/Badge";
@@ -30,7 +31,7 @@ export default function DebtsPage() {
   const [isPending, startTransition] = useTransition();
   const [loading, setLoading] = useState(true);
   const router = useRouter();
-  const { showToast } = useToast();
+  const { showToast, dismissToast } = useToast();
 
   // Sort state (Task 3b)
   const [sortField, setSortField] = useState<SortField>("debt");
@@ -183,9 +184,31 @@ export default function DebtsPage() {
     if (!confirm(`Вы действительно хотите удалить клиента "${c.name}"?`)) return;
     startTransition(async () => {
       try {
-        await deleteClient(c.id);
-        showToast("Клиент удалён");
+        const res = await deleteClient(c.id);
         loadData();
+
+        const msg = language === "ru" ? `Клиент "${c.name}" удален` : language === "uz" ? `"${c.name}" mijozi o'chirildi` : `Client "${c.name}" deleted`;
+        const undoLabel = language === "ru" ? "Отменить" : language === "uz" ? "Bekor qilish" : "Undo";
+
+        if (res?.logId) {
+          showToast(msg, {
+            type: "info",
+            duration: 5000,
+            action: {
+              label: undoLabel,
+              onClick: async () => {
+                await undoAction(res.logId!);
+                loadData();
+                showToast(
+                  language === "ru" ? "Действие отменено" : language === "uz" ? "Bekor qilindi" : "Action undone",
+                  "success"
+                );
+              },
+            },
+          });
+        } else {
+          showToast(msg, "success");
+        }
       } catch (e) {
         showToast(e instanceof Error ? e.message : "Ошибка удаления", "error");
       }

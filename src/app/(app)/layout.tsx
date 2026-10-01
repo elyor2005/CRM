@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useState } from "react";
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -11,18 +12,20 @@ import {
   BarChart3,
   ClipboardList,
   LogOut,
-  Building2,
   CreditCard,
   Settings,
+  Search,
 } from "lucide-react";
 import { ToastProvider } from "@/components/ui/Toast";
 import { useLanguage } from "@/lib/i18n/context";
 import { LanguageSwitcher } from "@/components/ui/LanguageSwitcher";
+import { GlobalSearch } from "@/components/search/GlobalSearch";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { t } = useLanguage();
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
 
   const handleLogout = async () => {
     try {
@@ -59,9 +62,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <div className="flex flex-col gap-6">
             {/* Brand Logo & App Header */}
             <div className="flex items-center gap-3 px-2 pt-1">
-              <div className="w-10 h-10 rounded-2xl bg-indigo-600 dark:bg-indigo-600 flex items-center justify-center text-white shadow-md shadow-indigo-600/20">
-                <Building2 size={22} />
-              </div>
+              <img
+                src="/icon.svg"
+                alt="Logo"
+                className="w-10 h-10 rounded-2xl shadow-md shadow-blue-600/20 object-contain"
+              />
               <div>
                 <h1 className="text-base font-extrabold text-gray-900 dark:text-white leading-tight tracking-tight">
                   {t("app.title")}
@@ -70,6 +75,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   CRM Cloud
                 </span>
               </div>
+            </div>
+
+            {/* Global Search Bar (Pinned in Sidebar) */}
+            <div className="px-1">
+              <GlobalSearch />
             </div>
 
             {/* Navigation Links */}
@@ -141,14 +151,23 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           {/* Mobile Top Header (< md) */}
           <header className="md:hidden sticky top-0 z-40 bg-white/90 dark:bg-[#131823]/90 backdrop-blur-md border-b border-gray-200/80 dark:border-zinc-800/80 px-4 py-3 flex items-center justify-between shadow-xs">
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-xs">
-                <Building2 size={18} />
-              </div>
+              <img
+                src="/icon.svg"
+                alt="Logo"
+                className="w-8 h-8 rounded-xl shadow-xs object-contain"
+              />
               <span className="text-base font-extrabold text-gray-900 dark:text-white tracking-tight">
                 {t("app.title")}
               </span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setMobileSearchOpen(true)}
+                title="Поиск"
+                className="p-2 text-gray-500 hover:text-indigo-600 dark:text-zinc-400 dark:hover:text-indigo-400 rounded-xl hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center cursor-pointer"
+              >
+                <Search size={18} />
+              </button>
               <LanguageSwitcher />
               <button
                 onClick={handleLogout}
@@ -159,6 +178,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               </button>
             </div>
           </header>
+
+          {/* Mobile Global Search Modal Overlay */}
+          <GlobalSearch
+            isMobileModal
+            isOpenMobile={mobileSearchOpen}
+            onCloseMobile={() => setMobileSearchOpen(false)}
+          />
 
           {/* Main Content Canvas (Max-width capped on Desktop) */}
           <main className="flex-1 w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 pb-28 md:pb-8">

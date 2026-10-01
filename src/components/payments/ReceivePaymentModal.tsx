@@ -25,8 +25,8 @@ export function ReceivePaymentModal({
   onSuccess,
   preselectedClientId,
 }: ReceivePaymentModalProps) {
-  const { t } = useLanguage();
-  const { showToast } = useToast();
+  const { language, t } = useLanguage();
+  const { showToast, dismissToast } = useToast();
   const [isPending, startTransition] = useTransition();
 
   const [clients, setClients] = useState<Array<{ id: string; name: string; currentDebt?: number }>>([]);
@@ -57,6 +57,11 @@ export function ReceivePaymentModal({
       return;
     }
 
+    const toastId = showToast(
+      language === "ru" ? "Сохранение..." : language === "uz" ? "Saqlanmoqda..." : "Saving...",
+      { type: "loading", duration: 15000 }
+    );
+
     startTransition(async () => {
       try {
         await createPayment({
@@ -67,7 +72,11 @@ export function ReceivePaymentModal({
           note,
         });
 
-        showToast(t("debts.addPayment"));
+        dismissToast(toastId);
+        showToast(
+          language === "ru" ? "Оплата сохранена" : language === "uz" ? "To'lov saqlandi" : "Payment saved",
+          "success"
+        );
         onClose();
         setAmount("");
         setNote("");
@@ -75,7 +84,18 @@ export function ReceivePaymentModal({
         setSelectedClientId("");
         if (onSuccess) onSuccess();
       } catch (e) {
-        showToast(e instanceof Error ? e.message : "Ошибка при сохранении оплаты", "error");
+        dismissToast(toastId);
+        showToast(
+          e instanceof Error ? e.message : (language === "ru" ? "Не удалось сохранить оплату" : "Failed to save payment"),
+          {
+            type: "error",
+            duration: 7000,
+            action: {
+              label: language === "ru" ? "Повторить" : language === "uz" ? "Qayta urinish" : "Retry",
+              onClick: () => handleSubmit(),
+            },
+          }
+        );
       }
     });
   };

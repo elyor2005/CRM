@@ -1,11 +1,11 @@
-"use client";
-
+import { useState } from "react";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { formatUZS, formatDateShort } from "@/lib/format";
 import { useLanguage } from "@/lib/i18n/context";
-import { User, Calendar, Trash2, Edit2 } from "lucide-react";
+import { User, Calendar, Trash2, Edit2, Printer } from "lucide-react";
+import { SaleReceiptModal } from "./SaleReceiptModal";
 
 export interface SaleDetailData {
   id: string;
@@ -44,6 +44,7 @@ export function SaleDetailModal({
   onEdit,
 }: SaleDetailModalProps) {
   const { language, t } = useLanguage();
+  const [receiptOpen, setReceiptOpen] = useState(false);
 
   if (!sale) return null;
 
@@ -143,8 +144,16 @@ export function SaleDetailModal({
         </div>
 
         {/* Action buttons */}
-        <div className="flex items-center justify-between gap-3 pt-2">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-3 pt-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setReceiptOpen(true)}
+              className="gap-1.5"
+            >
+              <Printer size={15} /> {language === "ru" ? "Чек" : language === "uz" ? "Chek" : "Receipt"}
+            </Button>
             {onEdit && (
               <Button
                 variant="outline"
@@ -176,6 +185,13 @@ export function SaleDetailModal({
             {t("common.close")}
           </Button>
         </div>
+
+        {/* Printable Receipt Modal */}
+        <SaleReceiptModal
+          sale={sale}
+          open={receiptOpen}
+          onClose={() => setReceiptOpen(false)}
+        />
       </div>
     </ModalSheet>
   );

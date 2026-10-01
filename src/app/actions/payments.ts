@@ -90,7 +90,7 @@ export async function deletePayment(id: string) {
     await tx.payment.delete({ where: { id } });
   });
 
-  await logAction({
+  const logId = await logAction({
     action: "DELETE",
     entity: "Payment",
     entityId: id,
@@ -108,4 +108,5 @@ export async function deletePayment(id: string) {
   });
 
   revalidateAll();
+  return { logId };
 }

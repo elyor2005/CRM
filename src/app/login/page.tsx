@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLanguage } from "@/lib/i18n/context";
 import { LanguageSwitcher } from "@/components/ui/LanguageSwitcher";
-import { Building2, Delete } from "lucide-react";
+import { Delete } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 
 export default function LoginPage() {
@@ -63,9 +63,11 @@ export default function LoginPage() {
       <div className="w-full max-w-sm flex flex-col items-center gap-8 bg-white dark:bg-zinc-900 border border-gray-200/80 dark:border-zinc-800 rounded-3xl p-8 shadow-xl">
         {/* Header */}
         <div className="flex flex-col items-center text-center">
-          <div className="w-16 h-16 rounded-2xl bg-blue-600 flex items-center justify-center text-white shadow-md mb-4">
-            <Building2 size={32} />
-          </div>
+          <img
+            src="/icon.svg"
+            alt="Logo"
+            className="w-16 h-16 rounded-2xl shadow-md mb-4 object-contain shadow-blue-600/20"
+          />
           <h1 className="text-2xl font-black text-gray-900 dark:text-white tracking-tight">
             {t("app.title")}
           </h1>

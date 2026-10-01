@@ -167,7 +167,7 @@ export async function createSale(data: unknown) {
  */
 export async function deleteSale(id: string) {
   let saleType = "SALE";
-  let saleClientId = "";
+  let saleSnapshot: any = null;
 
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const sale = await tx.sale.findUnique({
@@ -177,7 +177,22 @@ export async function deleteSale(id: string) {
 
     if (!sale) throw new Error("Продажа не найдена");
     saleType = sale.type;
-    saleClientId = sale.clientId;
+    saleSnapshot = {
+      id: sale.id,
+      clientId: sale.clientId,
+      type: sale.type,
+      date: sale.date,
+      payment: Number(sale.payment),
+      items: sale.items.map((i) => ({
+        id: i.id,
+        productId: i.productId,
+        quantity: Number(i.quantity),
+        unitPrice: Number(i.unitPrice),
+        lineTotal: Number(i.lineTotal),
+        isFreebie: i.isFreebie,
+        freebieFor: i.freebieFor,
+      })),
+    };
 
     const isSale = sale.type === "SALE";
 
@@ -218,14 +233,16 @@ export async function deleteSale(id: string) {
     });
   });
 
-  await logAction({
+  const logId = await logAction({
     action: "DELETE",
     entity: "Sale",
     entityId: id,
     description: `Удалена ${saleType === "SALE" ? "продажа" : "возврат"} #${id.slice(-6)}`,
+    snapshot: { deletedRecord: saleSnapshot },
   });
 
   revalidateAll();
+  return { logId };
 }
 
 /**

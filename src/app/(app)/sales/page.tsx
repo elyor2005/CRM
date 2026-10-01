@@ -18,6 +18,7 @@ import { CardSkeleton } from "@/components/ui/Skeleton";
 import { Table, TableRow } from "@/components/ui/Table";
 import { getSales, getProducts, createSale, updateSale, deleteSale } from "@/app/actions/sales";
 import { getClients, createClient } from "@/app/actions/clients";
+import { undoAction } from "@/app/actions/audit";
 import { useLanguage } from "@/lib/i18n/context";
 import { exportToExcel } from "@/lib/exportExcel";
 import { SaleDetailModal } from "@/components/sales/SaleDetailModal";
@@ -99,7 +100,7 @@ export default function SalesPage() {
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [loading, setLoading] = useState(true);
-  const { showToast } = useToast();
+  const { showToast, dismissToast } = useToast();
 
 
   // Editing state
@@ -212,6 +213,11 @@ export default function SalesPage() {
       return;
     }
 
+    const toastId = showToast(
+      language === "ru" ? "Сохранение..." : language === "uz" ? "Saqlanmoqda..." : "Saving...",
+      { type: "loading", duration: 15000 }
+    );
+
     startTransition(async () => {
       try {
         const payload = {
@@ -230,23 +236,37 @@ export default function SalesPage() {
 
         if (editingSaleId) {
           await updateSale(editingSaleId, payload);
+          dismissToast(toastId);
           showToast(
             language === "ru"
               ? "Продажа обновлена"
               : language === "uz"
               ? "Sotuv yangilandi"
-              : "Sale updated"
+              : "Sale updated",
+            "success"
           );
         } else {
           await createSale(payload);
-          showToast(formType === "SALE" ? t("sales.newSale") : t("sales.returnType"));
+          dismissToast(toastId);
+          showToast(formType === "SALE" ? t("sales.newSale") : t("sales.returnType"), "success");
         }
 
         setSheetOpen(false);
         resetForm();
         loadData();
       } catch (e) {
-        showToast(e instanceof Error ? e.message : "Error", "error");
+        dismissToast(toastId);
+        showToast(
+          e instanceof Error ? e.message : (language === "ru" ? "Не удалось сохранить" : "Failed to save"),
+          {
+            type: "error",
+            duration: 7000,
+            action: {
+              label: language === "ru" ? "Повторить" : language === "uz" ? "Qayta urinish" : "Retry",
+              onClick: () => handleSubmit(),
+            },
+          }
+        );
       }
     });
   };
@@ -254,12 +274,37 @@ export default function SalesPage() {
   const handleDelete = (id: string) => {
     startTransition(async () => {
       try {
-        await deleteSale(id);
-        showToast(t("common.delete"));
+        const res = await deleteSale(id);
         setDeleteConfirm(null);
         loadData();
+
+        const msg = language === "ru" ? "Продажа удалена" : language === "uz" ? "Sotuv o'chirildi" : "Sale deleted";
+        const undoLabel = language === "ru" ? "Отменить" : language === "uz" ? "Bekor qilish" : "Undo";
+
+        if (res?.logId) {
+          showToast(msg, {
+            type: "info",
+            duration: 5000,
+            action: {
+              label: undoLabel,
+              onClick: async () => {
+                await undoAction(res.logId!);
+                loadData();
+                showToast(
+                  language === "ru" ? "Действие отменено" : language === "uz" ? "Bekor qilindi" : "Action undone",
+                  "success"
+                );
+              },
+            },
+          });
+        } else {
+          showToast(msg, "success");
+        }
       } catch (e) {
-        showToast(e instanceof Error ? e.message : "Error", "error");
+        showToast(
+          e instanceof Error ? e.message : (language === "ru" ? "Не удалось удалить" : "Failed to delete"),
+          "error"
+        );
       }
     });
   };

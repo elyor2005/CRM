@@ -238,7 +238,7 @@ export async function deleteLiabilityEntry(id: string) {
   const old = await prisma.liabilityEntry.findUnique({ where: { id } });
   await prisma.liabilityEntry.delete({ where: { id } });
 
-  await logAction({
+  const logId = await logAction({
     action: "DELETE",
     entity: "LiabilityEntry",
     entityId: id,
@@ -251,6 +251,7 @@ export async function deleteLiabilityEntry(id: string) {
   });
 
   revalidateAll();
+  return { logId };
 }
 
 // ─── Manual Asset Entries (Part 2 Item F) ────────────────────────────────────
@@ -316,7 +317,7 @@ export async function deleteAssetEntry(id: string) {
   const old = await prisma.assetEntry.findUnique({ where: { id } });
   await prisma.assetEntry.delete({ where: { id } });
 
-  await logAction({
+  const logId = await logAction({
     action: "DELETE",
     entity: "AssetEntry",
     entityId: id,
@@ -329,4 +330,5 @@ export async function deleteAssetEntry(id: string) {
   });
 
   revalidateAll();
+  return { logId };
 }

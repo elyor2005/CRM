@@ -10,11 +10,11 @@ export async function logAction(data: {
   entityId?: string;
   description: string;
   snapshot?: any;
-}) {
+}): Promise<string | undefined> {
   try {
     const cleanSnapshot = data.snapshot != null ? JSON.parse(JSON.stringify(data.snapshot)) : undefined;
 
-    await prisma.auditLog.create({
+    const log = await prisma.auditLog.create({
       data: {
         action: data.action,
         entity: data.entity,
@@ -23,9 +23,11 @@ export async function logAction(data: {
         snapshot: cleanSnapshot,
       },
     });
+    return log.id;
   } catch (e) {
     // Audit logging should never break the main operation
     console.error("Audit log error:", e);
+    return undefined;
   }
 }
 
@@ -256,6 +258,103 @@ export async function undoAction(logId: string) {
           paymentMethod: deleted.paymentMethod || null,
           relatedClientId: deleted.relatedClientId || null,
         },
+      });
+    } else if (entity === "Payment") {
+      await prisma.$transaction(async (tx) => {
+        const client = await tx.client.findUnique({ where: { id: deleted.clientId } });
+        await tx.payment.create({
+          data: {
+            id: deleted.id,
+            clientId: deleted.clientId,
+            amount: new Prisma.Decimal(deleted.amount),
+            date: new Date(deleted.date),
+            method: deleted.method || "CASH",
+            note: deleted.note || null,
+          },
+        });
+
+        // Recreate linked finance entry
+        await tx.financeEntry.create({
+          data: {
+            date: new Date(deleted.date),
+            type: "INCOME",
+            category: "DEBT_PAYMENT",
+            description: `Оплата долга от ${client?.name || "клиента"}`,
+            amount: new Prisma.Decimal(deleted.amount),
+            relatedClientId: deleted.clientId,
+            relatedPaymentId: deleted.id,
+            paymentMethod: deleted.method || "CASH",
+          },
+        });
+      });
+    } else if (entity === "Sale") {
+      await prisma.$transaction(async (tx) => {
+        const isSale = deleted.type === "SALE";
+        const client = await tx.client.findUnique({ where: { id: deleted.clientId } });
+
+        // Recreate sale
+        const sale = await tx.sale.create({
+          data: {
+            id: deleted.id,
+            clientId: deleted.clientId,
+            type: deleted.type,
+            date: new Date(deleted.date),
+            payment: new Prisma.Decimal(deleted.payment || 0),
+          },
+        });
+
+        // Recreate items and update stock
+        for (const item of deleted.items || []) {
+          await tx.saleItem.create({
+            data: {
+              id: item.id,
+              saleId: sale.id,
+              productId: item.productId,
+              quantity: new Prisma.Decimal(item.quantity),
+              unitPrice: new Prisma.Decimal(item.unitPrice),
+              lineTotal: new Prisma.Decimal(item.lineTotal),
+              isFreebie: item.isFreebie || false,
+              freebieFor: item.freebieFor || null,
+            },
+          });
+
+          const movementType = isSale ? "SALE_OUT" : "RETURN_IN";
+          const movementQty = isSale
+            ? -Math.abs(Number(item.quantity))
+            : Math.abs(Number(item.quantity));
+
+          await tx.stockMovement.create({
+            data: {
+              itemId: item.productId,
+              type: movementType,
+              quantity: new Prisma.Decimal(movementQty),
+              date: new Date(deleted.date),
+              note: `${isSale ? "Продажа" : "Возврат"} #${sale.id.slice(-6)} — ${client?.name || "клиент"} (восстановлено)`,
+            },
+          });
+
+          await tx.inventoryItem.update({
+            where: { id: item.productId },
+            data: {
+              quantity: { increment: new Prisma.Decimal(movementQty) },
+            },
+          });
+        }
+
+        // Recreate finance entry if payment > 0
+        if (Number(deleted.payment) > 0) {
+          await tx.financeEntry.create({
+            data: {
+              date: new Date(deleted.date),
+              type: "INCOME",
+              description: `Оплата от ${client?.name || "клиента"} (${isSale ? "продажа" : "возврат"})`,
+              amount: new Prisma.Decimal(deleted.payment),
+              relatedClientId: deleted.clientId,
+              relatedSaleId: sale.id,
+              paymentMethod: "CASH",
+            },
+          });
+        }
       });
     } else if (entity === "LiabilityEntry") {
       await prisma.liabilityEntry.create({

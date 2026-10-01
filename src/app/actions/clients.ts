@@ -159,7 +159,7 @@ export async function deleteClient(id: string) {
 
   await prisma.client.delete({ where: { id } });
 
-  await logAction({
+  const logId = await logAction({
     action: "DELETE",
     entity: "Client",
     entityId: id,
@@ -177,6 +177,7 @@ export async function deleteClient(id: string) {
   });
 
   revalidateAll();
+  return { logId };
 }
 
 

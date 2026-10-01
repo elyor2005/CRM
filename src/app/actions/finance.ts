@@ -125,7 +125,7 @@ export async function deleteFinanceEntry(id: string) {
     await tx.financeEntry.delete({ where: { id } });
   });
 
-  await logAction({
+  const logId = await logAction({
     action: "DELETE",
     entity: "FinanceEntry",
     entityId: id,
@@ -146,6 +146,7 @@ export async function deleteFinanceEntry(id: string) {
   });
 
   revalidateAll();
+  return { logId };
 }
 
 export async function getCashBalance() {
