@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useEffect, useTransition } from "react";
-import { Plus, Trash2, CreditCard } from "lucide-react";
+import { Plus, Trash2, CreditCard, Pencil } from "lucide-react";
 import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { useToast } from "@/components/ui/Toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   createLiabilityEntry,
+  updateLiabilityEntry,
   deleteLiabilityEntry,
 } from "@/app/actions/report";
 import { useLanguage } from "@/lib/i18n/context";
@@ -25,6 +26,7 @@ export default function LiabilitiesPage() {
   const { language, t } = useLanguage();
   const [entries, setEntries] = useState<LiabilityEntry[]>([]);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [loading, setLoading] = useState(true);
@@ -49,17 +51,43 @@ export default function LiabilitiesPage() {
 
   const totalLiabilities = entries.reduce((sum, e) => sum + Number(e.amount), 0);
 
+  const openCreate = () => {
+    setEditId(null);
+    setFormName("");
+    setFormAmount("");
+    setFormDate(formatDateInput(new Date()));
+    setSheetOpen(true);
+  };
+
+  const openEdit = (entry: LiabilityEntry) => {
+    setEditId(entry.id);
+    setFormName(entry.name);
+    setFormAmount(String(Number(entry.amount)));
+    setFormDate(formatDateInput(new Date(entry.date)));
+    setSheetOpen(true);
+  };
+
   const handleSubmit = () => {
     if (!formName.trim() || !formAmount || Number(formAmount) <= 0) return;
     startTransition(async () => {
       try {
-        await createLiabilityEntry({
-          name: formName.trim(),
-          amount: formAmount,
-          date: formDate,
-        });
-        showToast(t("common.add"));
+        if (editId) {
+          await updateLiabilityEntry(editId, {
+            name: formName.trim(),
+            amount: formAmount,
+            date: formDate,
+          });
+          showToast(t("common.save"));
+        } else {
+          await createLiabilityEntry({
+            name: formName.trim(),
+            amount: formAmount,
+            date: formDate,
+          });
+          showToast(t("common.add"));
+        }
         setSheetOpen(false);
+        setEditId(null);
         setFormName("");
         setFormAmount("");
         loadData();
@@ -88,15 +116,7 @@ export default function LiabilitiesPage() {
       <PageHeader
         title={t("liabilities.title")}
         action={
-          <Button
-            onClick={() => {
-              setFormName("");
-              setFormAmount("");
-              setFormDate(formatDateInput(new Date()));
-              setSheetOpen(true);
-            }}
-            size="md"
-          >
+          <Button onClick={openCreate} size="md">
             <Plus size={18} /> {t("common.add")}
           </Button>
         }
@@ -123,14 +143,14 @@ export default function LiabilitiesPage() {
           icon={<CreditCard size={28} />}
           title={t("common.noData")}
           actionLabel={t("common.add")}
-          onAction={() => setSheetOpen(true)}
+          onAction={openCreate}
         />
       ) : (
         <Card className="flex flex-col divide-y divide-gray-100 dark:divide-zinc-800/80 p-0 overflow-hidden">
           {entries.map((entry) => (
             <div
               key={entry.id}
-              onClick={() => setDeleteId(entry.id)}
+              onClick={() => openEdit(entry)}
               className="flex items-center justify-between p-4 text-sm cursor-pointer hover:bg-gray-50/60 dark:hover:bg-zinc-800/40 transition-colors"
             >
               <div>
@@ -139,21 +159,40 @@ export default function LiabilitiesPage() {
               </div>
               <div className="flex items-center gap-2">
                 <span className="font-extrabold text-rose-600 dark:text-rose-400 tabular-nums">{formatUZS(entry.amount)}</span>
-                <Trash2 size={16} className="text-gray-400 hover:text-rose-500" />
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); openEdit(entry); }}
+                  className="text-gray-400 hover:text-indigo-500 transition-colors p-1.5 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/40"
+                  title={t("common.edit")}
+                >
+                  <Pencil size={15} />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setDeleteId(entry.id); }}
+                  className="text-gray-400 hover:text-rose-500 transition-colors p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                  title={t("common.delete")}
+                >
+                  <Trash2 size={15} />
+                </button>
               </div>
             </div>
           ))}
         </Card>
       )}
 
-      {/* Add Modal */}
-      <ModalSheet open={sheetOpen} onClose={() => setSheetOpen(false)} title={t("report.addLiability")}>
+      {/* Add / Edit Modal */}
+      <ModalSheet
+        open={sheetOpen}
+        onClose={() => { setSheetOpen(false); setEditId(null); }}
+        title={editId ? t("common.edit") : t("report.addLiability")}
+      >
         <div className="flex flex-col gap-4">
           <Input label={t("report.liabilityName")} placeholder="..." value={formName} onChange={(e) => setFormName(e.target.value)} autoFocus />
           <Input label={t("common.amount")} type="number" step="any" min="0" placeholder="0" value={formAmount} onChange={(e) => setFormAmount(e.target.value)} />
           <Input label={t("common.date")} type="date" value={formDate} onChange={(e) => setFormDate(e.target.value)} />
           <Button type="button" variant="primary" size="lg" onClick={handleSubmit} disabled={!formName.trim() || !formAmount || Number(formAmount) <= 0} loading={isPending}>
-            {t("common.add")}
+            {editId ? t("common.save") : t("common.add")}
           </Button>
         </div>
       </ModalSheet>

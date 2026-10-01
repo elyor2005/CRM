@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useTransition } from "react";
-import { Plus, Wallet, Link as LinkIcon, Trash2, Download, CreditCard } from "lucide-react";
+import { Plus, Wallet, Link as LinkIcon, Trash2, Download, CreditCard, Pencil } from "lucide-react";
 import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   getFinanceEntries,
   createFinanceEntry,
+  updateFinanceEntry,
   deleteFinanceEntry,
   getFinanceSummary,
   getExpenseCategories,
@@ -48,6 +49,7 @@ export default function FinancePage() {
   const [categories, setCategories] = useState<Array<{ id: string; name: string }>>([]);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [loading, setLoading] = useState(true);
@@ -60,6 +62,28 @@ export default function FinancePage() {
   const [formDate, setFormDate] = useState(formatDateInput(new Date()));
   const [formCategory, setFormCategory] = useState("");
   const [formMethod, setFormMethod] = useState<string>("CASH");
+
+  const openCreate = () => {
+    setEditId(null);
+    setFormType("EXPENSE");
+    setFormDesc("");
+    setFormAmount("");
+    setFormDate(formatDateInput(new Date()));
+    setFormCategory("");
+    setFormMethod("CASH");
+    setSheetOpen(true);
+  };
+
+  const openEdit = (entry: Entry) => {
+    setEditId(entry.id);
+    setFormType(entry.type);
+    setFormDesc(entry.description);
+    setFormAmount(String(Number(entry.amount)));
+    setFormDate(formatDateInput(new Date(entry.date)));
+    setFormCategory(entry.category || "");
+    setFormMethod(entry.paymentMethod || "CASH");
+    setSheetOpen(true);
+  };
 
   const loadData = () => {
     startTransition(async () => {
@@ -90,17 +114,23 @@ export default function FinancePage() {
     );
     startTransition(async () => {
       try {
-        await createFinanceEntry({
+        const payload = {
           type: formType,
           description: formDesc.trim(),
           amount: formAmount,
           date: formDate,
           category: formCategory || undefined,
           paymentMethod: formMethod as any,
-        });
+        };
+        if (editId) {
+          await updateFinanceEntry(editId, payload);
+        } else {
+          await createFinanceEntry(payload);
+        }
         dismissToast(toastId);
         showToast(language === "ru" ? "Запись сохранена" : language === "uz" ? "Yozuv saqlandi" : "Entry saved", "success");
         setSheetOpen(false);
+        setEditId(null);
         setFormDesc("");
         setFormAmount("");
         setFormCategory("");
@@ -248,15 +278,7 @@ export default function FinancePage() {
               <span className="text-xs sm:text-sm font-bold">{t("debts.addPayment")}</span>
             </Button>
             <Button
-              onClick={() => {
-                setFormType("EXPENSE");
-                setFormDesc("");
-                setFormAmount("");
-                setFormDate(formatDateInput(new Date()));
-                setFormCategory("");
-                setFormMethod("CASH");
-                setSheetOpen(true);
-              }}
+              onClick={openCreate}
               size="md"
             >
               <Plus size={18} /> {t("finance.newEntry")}
@@ -360,7 +382,7 @@ export default function FinancePage() {
             return (
               <TableRow
                 key={entry.id}
-                onClick={!isLinked ? () => setDeleteId(entry.id) : undefined}
+                onClick={!isLinked ? () => openEdit(entry) : undefined}
               >
                 <td className="p-3.5 whitespace-nowrap text-gray-700 dark:text-zinc-300 font-medium">
                   {formatDateShort(entry.date, language)}
@@ -393,13 +415,24 @@ export default function FinancePage() {
                 </td>
                 <td className="p-3.5 text-center">
                   {!isLinked && (
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); setDeleteId(entry.id); }}
-                      className="text-gray-400 hover:text-rose-500 transition-colors p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    <div className="flex items-center justify-center gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); openEdit(entry); }}
+                        className="text-gray-400 hover:text-indigo-500 transition-colors p-1.5 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/40"
+                        title={t("common.edit")}
+                      >
+                        <Pencil size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setDeleteId(entry.id); }}
+                        className="text-gray-400 hover:text-rose-500 transition-colors p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                        title={t("common.delete")}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   )}
                 </td>
               </TableRow>
@@ -408,11 +441,11 @@ export default function FinancePage() {
         </Table>
       )}
 
-      {/* Add Finance Entry Modal Sheet */}
+      {/* Add / Edit Finance Entry Modal Sheet */}
       <ModalSheet
         open={sheetOpen}
-        onClose={() => setSheetOpen(false)}
-        title={t("finance.newEntry")}
+        onClose={() => { setSheetOpen(false); setEditId(null); }}
+        title={editId ? t("common.edit") : t("finance.newEntry")}
       >
         <div className="flex flex-col gap-4">
           <div className="w-full">
@@ -495,11 +528,13 @@ export default function FinancePage() {
             type="button"
             variant="primary"
             size="lg"
+            id="finance-entry-submit"
             onClick={handleSubmit}
             disabled={!formDesc.trim() || !formAmount || Number(formAmount) <= 0}
             loading={isPending}
           >
-            {t("common.add")}
+            {editId ? t("common.save") : t("common.add")}
+
           </Button>
         </div>
       </ModalSheet>

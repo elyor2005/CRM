@@ -85,6 +85,59 @@ export async function createFinanceEntry(data: unknown) {
   return entry;
 }
 
+export async function updateFinanceEntry(id: string, data: unknown) {
+  const parsed = FinanceEntryFormSchema.parse(data);
+  const old = await prisma.financeEntry.findUnique({ where: { id } });
+  if (!old) throw new Error("Запись не найдена");
+  if (old.relatedSaleId) {
+    throw new Error("Нельзя редактировать автоматическую запись, привязанную к продаже");
+  }
+
+  let expenseCategoryId: string | null = null;
+  if (parsed.category) {
+    try {
+      const cat = await prisma.expenseCategory.findUnique({
+        where: { name: parsed.category },
+      });
+      if (cat) expenseCategoryId = cat.id;
+    } catch {}
+  }
+
+  const entry = await prisma.financeEntry.update({
+    where: { id },
+    data: {
+      date: new Date(parsed.date),
+      type: parsed.type,
+      description: parsed.description,
+      amount: new Prisma.Decimal(parsed.amount),
+      category: parsed.category || null,
+      expenseCategoryId,
+      paymentMethod: parsed.paymentMethod || null,
+    },
+  });
+
+  await logAction({
+    action: "UPDATE",
+    entity: "FinanceEntry",
+    entityId: id,
+    description: `Обновлена запись: ${parsed.description} — ${parsed.amount}`,
+    snapshot: {
+      previous: {
+        id: old.id,
+        date: old.date,
+        type: old.type,
+        description: old.description,
+        amount: Number(old.amount),
+        category: old.category,
+        paymentMethod: old.paymentMethod,
+      },
+    },
+  });
+
+  revalidateAll();
+  return entry;
+}
+
 export async function deleteFinanceEntry(id: string) {
   // Only allow deleting manual entries (not linked to sales)
   const entry = await prisma.financeEntry.findUnique({ where: { id } });

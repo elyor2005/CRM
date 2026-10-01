@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useTransition } from "react";
-import { Plus, Trash2, Download, Calendar } from "lucide-react";
+import { Plus, Trash2, Download, Calendar, Pencil } from "lucide-react";
 import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
@@ -10,8 +10,10 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   getBalanceReport,
   createLiabilityEntry,
+  updateLiabilityEntry,
   deleteLiabilityEntry,
   createAssetEntry,
+  updateAssetEntry,
   deleteAssetEntry,
 } from "@/app/actions/report";
 import { getProfitReport } from "@/app/actions/profit";
@@ -47,12 +49,13 @@ export default function ReportPage() {
   );
 
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [loading, setLoading] = useState(true);
   const { showToast } = useToast();
 
-  // Form
+  // Form (liability)
   const [formName, setFormName] = useState("");
   const [formAmount, setFormAmount] = useState("");
   const [formDate, setFormDate] = useState(formatDateInput(new Date()));
@@ -88,17 +91,40 @@ export default function ReportPage() {
     });
   };
 
+  const openCreateLiability = () => {
+    setEditId(null);
+    setFormName("");
+    setFormAmount("");
+    setFormDate(formatDateInput(new Date()));
+    setSheetOpen(true);
+  };
+
+  const openEditLiability = (entry: { id: string; name: string; amount: any; date: any }) => {
+    setEditId(entry.id);
+    setFormName(entry.name);
+    setFormAmount(String(Number(entry.amount)));
+    setFormDate(formatDateInput(new Date(entry.date)));
+    setSheetOpen(true);
+  };
+
   const handleSubmit = () => {
     if (!formName.trim() || !formAmount || Number(formAmount) <= 0) return;
     startTransition(async () => {
       try {
-        await createLiabilityEntry({
+        const payload = {
           name: formName.trim(),
           amount: formAmount,
           date: formDate,
-        });
-        showToast(t("common.add"));
+        };
+        if (editId) {
+          await updateLiabilityEntry(editId, payload);
+          showToast(t("common.save"));
+        } else {
+          await createLiabilityEntry(payload);
+          showToast(t("common.add"));
+        }
         setSheetOpen(false);
+        setEditId(null);
         setFormName("");
         setFormAmount("");
         loadData();
@@ -124,12 +150,29 @@ export default function ReportPage() {
 
   // Manual Asset Entry form (Task F)
   const [assetSheetOpen, setAssetSheetOpen] = useState(false);
+  const [editAssetId, setEditAssetId] = useState<string | null>(null);
   const [deleteAssetId, setDeleteAssetId] = useState<string | null>(null);
   const [assetFormName, setAssetFormName] = useState("");
   const [assetFormAmount, setAssetFormAmount] = useState("");
   const [assetFormDate, setAssetFormDate] = useState(() =>
     formatDateInput(new Date()),
   );
+
+  const openCreateAsset = () => {
+    setEditAssetId(null);
+    setAssetFormName("");
+    setAssetFormAmount("");
+    setAssetFormDate(formatDateInput(new Date()));
+    setAssetSheetOpen(true);
+  };
+
+  const openEditAsset = (asset: { id: string; name: string; amount: any; date: any }) => {
+    setEditAssetId(asset.id);
+    setAssetFormName(asset.name);
+    setAssetFormAmount(String(Number(asset.amount)));
+    setAssetFormDate(formatDateInput(new Date(asset.date)));
+    setAssetSheetOpen(true);
+  };
 
   const handleAssetSubmit = () => {
     if (
@@ -140,13 +183,20 @@ export default function ReportPage() {
       return;
     startTransition(async () => {
       try {
-        await createAssetEntry({
+        const payload = {
           name: assetFormName.trim(),
           amount: assetFormAmount,
           date: assetFormDate,
-        });
-        showToast("Актив добавлен");
+        };
+        if (editAssetId) {
+          await updateAssetEntry(editAssetId, payload);
+          showToast(t("common.save"));
+        } else {
+          await createAssetEntry(payload);
+          showToast("Актив добавлен");
+        }
         setAssetSheetOpen(false);
+        setEditAssetId(null);
         setAssetFormName("");
         setAssetFormAmount("");
         loadData();
@@ -380,12 +430,7 @@ export default function ReportPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => {
-                    setAssetFormName("");
-                    setAssetFormAmount("");
-                    setAssetFormDate(formatDateInput(new Date()));
-                    setAssetSheetOpen(true);
-                  }}
+                  onClick={openCreateAsset}
                   className="gap-1 text-xs"
                 >
                   <Plus size={14} /> Добавить актив
@@ -445,7 +490,7 @@ export default function ReportPage() {
                     {report.debit.assets.map((asset: any) => (
                       <div
                         key={asset.id}
-                        onClick={() => setDeleteAssetId(asset.id)}
+                        onClick={() => openEditAsset(asset)}
                         className="flex items-center justify-between p-3.5 text-sm cursor-pointer hover:bg-gray-50/60 dark:hover:bg-zinc-800/40 transition-colors"
                       >
                         <div>
@@ -460,10 +505,22 @@ export default function ReportPage() {
                           <span className="font-extrabold text-indigo-600 dark:text-indigo-400 tabular-nums">
                             {formatUZS(asset.amount)}
                           </span>
-                          <Trash2
-                            size={16}
-                            className="text-gray-400 hover:text-rose-500"
-                          />
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); openEditAsset(asset); }}
+                            className="text-gray-400 hover:text-indigo-500 transition-colors p-1 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/40"
+                            title={t("common.edit")}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setDeleteAssetId(asset.id); }}
+                            className="text-gray-400 hover:text-rose-500 transition-colors p-1 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                            title={t("common.delete")}
+                          >
+                            <Trash2 size={14} />
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -488,12 +545,7 @@ export default function ReportPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => {
-                    setFormName("");
-                    setFormAmount("");
-                    setFormDate(formatDateInput(new Date()));
-                    setSheetOpen(true);
-                  }}
+                  onClick={openCreateLiability}
                 >
                   <Plus size={16} /> {t("common.add")}
                 </Button>
@@ -508,7 +560,7 @@ export default function ReportPage() {
                   report.credit.liabilities.map((entry) => (
                     <div
                       key={entry.id}
-                      onClick={() => setDeleteId(entry.id)}
+                      onClick={() => openEditLiability(entry)}
                       className="flex items-center justify-between p-3.5 text-sm cursor-pointer hover:bg-gray-50/60 dark:hover:bg-zinc-800/40 transition-colors"
                     >
                       <div>
@@ -523,10 +575,22 @@ export default function ReportPage() {
                         <span className="font-extrabold text-rose-600 dark:text-rose-400 tabular-nums">
                           {formatUZS(entry.amount)}
                         </span>
-                        <Trash2
-                          size={16}
-                          className="text-gray-400 hover:text-rose-500"
-                        />
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); openEditLiability(entry); }}
+                          className="text-gray-400 hover:text-indigo-500 transition-colors p-1 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/40"
+                          title={t("common.edit")}
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setDeleteId(entry.id); }}
+                          className="text-gray-400 hover:text-rose-500 transition-colors p-1 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                          title={t("common.delete")}
+                        >
+                          <Trash2 size={14} />
+                        </button>
                       </div>
                     </div>
                   ))
@@ -699,11 +763,11 @@ export default function ReportPage() {
         </>
       )}
 
-      {/* Add Liability Modal Sheet */}
+      {/* Add / Edit Liability Modal Sheet */}
       <ModalSheet
         open={sheetOpen}
-        onClose={() => setSheetOpen(false)}
-        title={t("report.addLiability")}
+        onClose={() => { setSheetOpen(false); setEditId(null); }}
+        title={editId ? t("common.edit") : t("report.addLiability")}
       >
         <div className="flex flex-col gap-4">
           <Input
@@ -738,7 +802,7 @@ export default function ReportPage() {
             }
             loading={isPending}
           >
-            {t("common.add")}
+            {editId ? t("common.save") : t("common.add")}
           </Button>
         </div>
       </ModalSheet>
@@ -754,11 +818,11 @@ export default function ReportPage() {
         onCancel={() => setDeleteId(null)}
       />
 
-      {/* Add Asset Modal Sheet (Task F) */}
+      {/* Add / Edit Asset Modal Sheet (Task F) */}
       <ModalSheet
         open={assetSheetOpen}
-        onClose={() => setAssetSheetOpen(false)}
-        title="Добавить актив (Дебет)"
+        onClose={() => { setAssetSheetOpen(false); setEditAssetId(null); }}
+        title={editAssetId ? t("common.edit") : "Добавить актив (Дебет)"}
       >
         <div className="flex flex-col gap-4">
           <Input
@@ -795,7 +859,7 @@ export default function ReportPage() {
             }
             loading={isPending}
           >
-            {t("common.add")}
+            {editAssetId ? t("common.save") : t("common.add")}
           </Button>
         </div>
       </ModalSheet>
