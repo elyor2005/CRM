@@ -237,6 +237,10 @@ export async function produceItem(data: unknown) {
   const qty = Number(parsed.quantity);
   const movDate = parsed.date ? new Date(parsed.date) : new Date();
 
+  // Track consumed ingredients for the audit snapshot
+  const consumedIngredients: Array<{ itemId: string; name: string; quantity: number }> = [];
+  let productName = "";
+
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const item = await tx.inventoryItem.findUnique({
       where: { id: parsed.itemId },
@@ -247,6 +251,8 @@ export async function produceItem(data: unknown) {
     if (item.category !== "FINISHED_GOOD") {
       throw new Error("Производство доступно только для готовой продукции");
     }
+
+    productName = item.name;
 
     // Add finished good stock
     await tx.inventoryItem.update({
@@ -290,6 +296,12 @@ export async function produceItem(data: unknown) {
           note: `Расход на "${item.name}" × ${qty}`,
         },
       });
+
+      consumedIngredients.push({
+        itemId: line.ingredientId,
+        name: line.ingredient.name,
+        quantity: consumeQty,
+      });
     }
   });
 
@@ -298,6 +310,13 @@ export async function produceItem(data: unknown) {
     entity: "InventoryItem",
     entityId: parsed.itemId,
     description: `Произведено ${qty} шт. (${movDate.toISOString().split("T")[0]})`,
+    snapshot: {
+      productId: parsed.itemId,
+      productName,
+      quantity: qty,
+      date: movDate.toISOString(),
+      consumedIngredients,
+    },
   });
 
   revalidateAll();
@@ -381,6 +400,13 @@ export async function writeOffItem(data: unknown) {
     entity: "InventoryItem",
     entityId: parsed.itemId,
     description: `Списание ${qty} шт. (${parsed.reason === "DEFECT" ? "Брак" : "Корректировка"})`,
+    snapshot: {
+      itemId: parsed.itemId,
+      quantity: qty,
+      reason: parsed.reason,
+      date: movDate.toISOString(),
+      note: parsed.note,
+    },
   });
 
   revalidateAll();
@@ -425,6 +451,14 @@ export async function createBonusItem(data: unknown) {
     entity: "InventoryItem",
     entityId: parsed.itemId,
     description: `Бонус/Образец: ${qty} шт. получателю "${parsed.recipient}"`,
+    snapshot: {
+      itemId: parsed.itemId,
+      quantity: qty,
+      reason: "BONUS",
+      recipient: parsed.recipient,
+      date: movDate.toISOString(),
+      note: parsed.note,
+    },
   });
 
   revalidateAll();

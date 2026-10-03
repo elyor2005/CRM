@@ -9,6 +9,12 @@ interface ConfirmDialogProps {
   confirmLabel?: string;
   cancelLabel?: string;
   destructive?: boolean;
+  hideCancel?: boolean;
+  extraAction?: {
+    label: string;
+    variant?: "primary" | "secondary" | "outline" | "destructive";
+    onClick: () => void;
+  };
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -20,6 +26,8 @@ export function ConfirmDialog({
   confirmLabel = "Да",
   cancelLabel = "Отмена",
   destructive = false,
+  hideCancel = false,
+  extraAction,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -45,10 +53,22 @@ export function ConfirmDialog({
           </p>
         </div>
 
-        <div className="flex items-center justify-end gap-3 pt-2">
-          <Button type="button" variant="secondary" size="md" onClick={onCancel}>
-            {cancelLabel}
-          </Button>
+        <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2">
+          {!hideCancel && (
+            <Button type="button" variant="secondary" size="md" onClick={onCancel}>
+              {cancelLabel}
+            </Button>
+          )}
+          {extraAction && (
+            <Button
+              type="button"
+              variant={extraAction.variant || "secondary"}
+              size="md"
+              onClick={extraAction.onClick}
+            >
+              {extraAction.label}
+            </Button>
+          )}
           <Button
             type="button"
             variant={destructive ? "destructive" : "primary"}

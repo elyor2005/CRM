@@ -41,6 +41,7 @@ export async function getBalanceReport(options?: { asOfDate?: string }) {
       _sum: { amount: true },
     }),
     prisma.client.findMany({
+      where: { isArchived: false },
       include: {
         sales: {
           where: dateFilter ? { date: dateFilter } : undefined,

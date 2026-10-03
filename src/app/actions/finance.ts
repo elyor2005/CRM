@@ -8,6 +8,7 @@ import { logAction } from "./audit";
 
 export async function getFinanceEntries(options?: {
   filter?: "INCOME" | "EXPENSE";
+  category?: string;
   dateFrom?: string;
   dateTo?: string;
 }) {
@@ -15,6 +16,14 @@ export async function getFinanceEntries(options?: {
 
   if (options?.filter) {
     where.type = options.filter;
+  }
+
+  if (options?.category) {
+    if (options.category === "__UNCATEGORIZED__") {
+      where.category = null;
+    } else {
+      where.category = options.category;
+    }
   }
 
   if (options?.dateFrom || options?.dateTo) {

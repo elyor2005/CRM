@@ -6,7 +6,14 @@ import { formatUZS } from "@/lib/format";
 import { isRealItem } from "@/lib/constants";
 import { useToast } from "@/components/ui/Toast";
 import { getAllItems, updateInventoryItem } from "@/app/actions/inventory";
-import { getClients, createClient, updateClient, deleteClient } from "@/app/actions/clients";
+import {
+  getClients,
+  createClient,
+  updateClient,
+  deleteClient,
+  checkClientDeletionStatus,
+  archiveClient,
+} from "@/app/actions/clients";
 import {
   getExpenseCategories,
   createExpenseCategory,
@@ -22,6 +29,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { CardSkeleton } from "@/components/ui/Skeleton";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { ModalSheet } from "@/components/ui/ModalSheet";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 type InventoryItem = Awaited<ReturnType<typeof getAllItems>>[number];
 type Client = Awaited<ReturnType<typeof getClients>>[number];
@@ -179,15 +187,72 @@ export default function SettingsPage() {
     });
   };
 
-  const handleDeleteClient = (c: Client) => {
-    if (!confirm(`Вы действительно хотите удалить клиента "${c.name}"?`)) return;
+  // Client Delete confirm dialog state
+  const [clientDeleteConfirmState, setClientDeleteConfirmState] = useState<{
+    open: boolean;
+    client: Client | null;
+    canDelete: boolean;
+    message: string;
+  }>({
+    open: false,
+    client: null,
+    canDelete: false,
+    message: "",
+  });
+
+  const [clientArchiveConfirmState, setClientArchiveConfirmState] = useState<{
+    open: boolean;
+    client: Client | null;
+  }>({
+    open: false,
+    client: null,
+  });
+
+  const handleDeleteClientClick = async (c: Client) => {
+    const status = await checkClientDeletionStatus(c.id);
+    if (!status.canDelete) {
+      setClientDeleteConfirmState({
+        open: true,
+        client: c,
+        canDelete: false,
+        message:
+          status.reason ||
+          `У клиента "${c.name}" есть история операций (продажи, оплаты или финансы). Удаление невозможно.`,
+      });
+    } else {
+      setClientDeleteConfirmState({
+        open: true,
+        client: c,
+        canDelete: true,
+        message: `Вы уверены, что хотите удалить клиента "${c.name}"? Это действие нельзя отменить.`,
+      });
+    }
+  };
+
+  const handleConfirmDeleteClient = (c: Client) => {
     startTransition(async () => {
       try {
-        await deleteClient(c.id);
+        const res = await deleteClient(c.id);
+        if (res.error) {
+          showToast(res.error, "error");
+          return;
+        }
         showToast("Клиент удалён");
         loadData();
       } catch (e) {
         showToast(e instanceof Error ? e.message : "Ошибка удаления", "error");
+      }
+    });
+  };
+
+  const handleConfirmArchiveClient = (c: Client) => {
+    startTransition(async () => {
+      try {
+        await archiveClient(c.id);
+        showToast("Клиент перемещён в архив");
+        loadData();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Ошибка архивации", "error");
       }
     });
   };
@@ -230,8 +295,23 @@ export default function SettingsPage() {
     });
   };
 
-  const handleDeleteCategory = (cat: ExpenseCategoryItem) => {
-    if (!confirm(`Удалить категорию "${cat.name}"?`)) return;
+  // Category delete confirm dialog state
+  const [categoryDeleteConfirmState, setCategoryDeleteConfirmState] = useState<{
+    open: boolean;
+    category: ExpenseCategoryItem | null;
+  }>({
+    open: false,
+    category: null,
+  });
+
+  const handleDeleteCategoryClick = (cat: ExpenseCategoryItem) => {
+    setCategoryDeleteConfirmState({
+      open: true,
+      category: cat,
+    });
+  };
+
+  const handleConfirmDeleteCategory = (cat: ExpenseCategoryItem) => {
     startTransition(async () => {
       try {
         await deleteExpenseCategory(cat.id);
@@ -464,7 +544,7 @@ export default function SettingsPage() {
                                   <Edit size={14} />
                                 </button>
                                 <button
-                                  onClick={() => handleDeleteClient(client)}
+                                  onClick={() => handleDeleteClientClick(client)}
                                   className="p-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/60 transition-colors"
                                   title="Удалить"
                                 >
@@ -534,7 +614,7 @@ export default function SettingsPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleDeleteCategory(cat)}
+                          onClick={() => handleDeleteCategoryClick(cat)}
                           className="h-8 px-2.5 gap-1 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/30"
                         >
                           <Trash2 size={14} /> Удалить
@@ -716,6 +796,73 @@ export default function SettingsPage() {
           </Button>
         </div>
       </ModalSheet>
+
+      <ConfirmDialog
+        open={clientDeleteConfirmState.open}
+        title={clientDeleteConfirmState.canDelete ? "Удаление клиента" : "Невозможно удалить клиента"}
+        message={clientDeleteConfirmState.message}
+        confirmLabel={clientDeleteConfirmState.canDelete ? "Удалить" : "Понятно"}
+        cancelLabel="Отмена"
+        destructive={clientDeleteConfirmState.canDelete}
+        hideCancel={!clientDeleteConfirmState.canDelete}
+        extraAction={
+          !clientDeleteConfirmState.canDelete && !clientDeleteConfirmState.client?.isArchived
+            ? {
+                label: "Архивировать вместо удаления",
+                variant: "primary",
+                onClick: () => {
+                  const clientToArchive = clientDeleteConfirmState.client;
+                  setClientDeleteConfirmState((prev) => ({ ...prev, open: false }));
+                  if (clientToArchive) {
+                    setClientArchiveConfirmState({ open: true, client: clientToArchive });
+                  }
+                },
+              }
+            : undefined
+        }
+        onConfirm={() => {
+          const clientToDelete = clientDeleteConfirmState.client;
+          const shouldDelete = clientDeleteConfirmState.canDelete;
+          setClientDeleteConfirmState((prev) => ({ ...prev, open: false }));
+          if (shouldDelete && clientToDelete) {
+            handleConfirmDeleteClient(clientToDelete);
+          }
+        }}
+        onCancel={() => setClientDeleteConfirmState((prev) => ({ ...prev, open: false }))}
+      />
+
+      <ConfirmDialog
+        open={clientArchiveConfirmState.open}
+        title="Архивация клиента"
+        message={`Переместить клиента "${clientArchiveConfirmState.client?.name}" в архив? Его долг перестанет учитываться в общих отчётах, но вся история сохранится.`}
+        confirmLabel="Архивировать"
+        cancelLabel="Отмена"
+        onConfirm={() => {
+          const clientToArchive = clientArchiveConfirmState.client;
+          setClientArchiveConfirmState({ open: false, client: null });
+          if (clientToArchive) {
+            handleConfirmArchiveClient(clientToArchive);
+          }
+        }}
+        onCancel={() => setClientArchiveConfirmState({ open: false, client: null })}
+      />
+
+      <ConfirmDialog
+        open={categoryDeleteConfirmState.open}
+        title="Удаление категории расходов"
+        message={`Вы уверены, что хотите удалить категорию "${categoryDeleteConfirmState.category?.name}"?`}
+        confirmLabel="Удалить"
+        cancelLabel="Отмена"
+        destructive={true}
+        onConfirm={() => {
+          const catToDelete = categoryDeleteConfirmState.category;
+          setCategoryDeleteConfirmState({ open: false, category: null });
+          if (catToDelete) {
+            handleConfirmDeleteCategory(catToDelete);
+          }
+        }}
+        onCancel={() => setCategoryDeleteConfirmState({ open: false, category: null })}
+      />
     </div>
   );
 }

@@ -38,7 +38,7 @@ export function ReceivePaymentModal({
 
   useEffect(() => {
     if (open) {
-      getClientsWithDebt().then((list) => {
+      getClientsWithDebt({ tab: preselectedClientId ? "ALL" : "ACTIVE" }).then((list) => {
         setClients(list.map((c) => ({ id: c.id, name: c.name, currentDebt: c.debt })));
       });
       if (preselectedClientId) {

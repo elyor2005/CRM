@@ -395,7 +395,140 @@ export async function undoAction(logId: string) {
     } else {
       throw new Error(`Восстановление удаленной сущности "${entity}" не поддерживается`);
     }
-  } else {
+  }
+
+  // ─── 4. UNDO PRODUCE (Reverse production: decrement product, restore ingredients) ──
+  else if (action === "PRODUCE") {
+    if (!entityId) {
+      throw new Error("Отсутствует ID товара для отмены производства");
+    }
+
+    const snap = snapshot as any;
+
+    if (!snap || !snap.consumedIngredients || !Array.isArray(snap.consumedIngredients)) {
+      throw new Error(
+        "Невозможно отменить эту запись производства — отсутствует снимок использованных ингредиентов. " +
+        "Эта запись была создана до добавления функции отмены производства. " +
+        "Необходима ручная корректировка остатков."
+      );
+    }
+
+    const producedQty = Number(snap.quantity);
+    const productionDate = snap.date ? new Date(snap.date) : undefined;
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Decrement the finished product back down
+      await tx.inventoryItem.update({
+        where: { id: entityId },
+        data: { quantity: { decrement: new Prisma.Decimal(producedQty) } },
+      });
+
+      // 2. Delete the PRODUCTION_IN stock movement for this product
+      //    Match by itemId, type, quantity, and date if available
+      const productMovements = await tx.stockMovement.findMany({
+        where: {
+          itemId: entityId,
+          type: "PRODUCTION_IN",
+          quantity: new Prisma.Decimal(producedQty),
+          ...(productionDate ? { date: productionDate } : {}),
+        },
+        orderBy: { date: "desc" },
+        take: 1,
+      });
+      if (productMovements.length > 0) {
+        await tx.stockMovement.delete({ where: { id: productMovements[0].id } });
+      }
+
+      // 3. Restore each consumed ingredient
+      for (const ingredient of snap.consumedIngredients) {
+        const consumedQty = Number(ingredient.quantity);
+
+        // Increment ingredient stock back up
+        await tx.inventoryItem.update({
+          where: { id: ingredient.itemId },
+          data: { quantity: { increment: new Prisma.Decimal(consumedQty) } },
+        });
+
+        // Delete the PRODUCTION_CONSUME movement for this ingredient
+        const consumeMovements = await tx.stockMovement.findMany({
+          where: {
+            itemId: ingredient.itemId,
+            type: "PRODUCTION_CONSUME",
+            quantity: new Prisma.Decimal(-consumedQty),
+            ...(productionDate ? { date: productionDate } : {}),
+          },
+          orderBy: { date: "desc" },
+          take: 1,
+        });
+        if (consumeMovements.length > 0) {
+          await tx.stockMovement.delete({ where: { id: consumeMovements[0].id } });
+        }
+      }
+    });
+  }
+
+  // ─── 5. UNDO WRITE_OFF (Reverse write-off / bonus: increment item stock back up, delete movement) ──
+  else if (action === "WRITE_OFF") {
+    if (!entityId) {
+      throw new Error("Отсутствует ID товара для отмены списания");
+    }
+
+    const snap = snapshot as any;
+
+    if (!snap || snap.quantity == null) {
+      throw new Error(
+        "Невозможно отменить эту запись списания — отсутствует снимок данных. " +
+        "Эта запись была создана до добавления функции отмены списания. " +
+        "Необходима ручная корректировка остатков."
+      );
+    }
+
+    const writeOffQty = Number(snap.quantity);
+    const movementType = snap.reason || "DEFECT";
+    const movementDate = snap.date ? new Date(snap.date) : undefined;
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Increment the item stock back up
+      await tx.inventoryItem.update({
+        where: { id: entityId },
+        data: { quantity: { increment: new Prisma.Decimal(writeOffQty) } },
+      });
+
+      // 2. Delete the corresponding StockMovement
+      const movements = await tx.stockMovement.findMany({
+        where: {
+          itemId: entityId,
+          type: movementType,
+          quantity: new Prisma.Decimal(-writeOffQty),
+          ...(movementDate ? { date: movementDate } : {}),
+        },
+        orderBy: { date: "desc" },
+        take: 1,
+      });
+
+      if (movements.length > 0) {
+        await tx.stockMovement.delete({ where: { id: movements[0].id } });
+      }
+    });
+  }
+
+  // ─── 6. UNDO ARCHIVE / UNARCHIVE ──────────────────────────────────────────
+  else if (action === "ARCHIVE") {
+    if (!entityId) throw new Error("Отсутствует ID клиента");
+    await prisma.client.update({
+      where: { id: entityId },
+      data: { isArchived: false, archivedAt: null },
+    });
+  }
+  else if (action === "UNARCHIVE") {
+    if (!entityId) throw new Error("Отсутствует ID клиента");
+    await prisma.client.update({
+      where: { id: entityId },
+      data: { isArchived: true, archivedAt: new Date() },
+    });
+  }
+
+  else {
     throw new Error(`Действие "${action}" не подлежит отмене`);
   }
 

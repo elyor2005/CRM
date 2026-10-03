@@ -24,8 +24,9 @@ async function getOrCreateOpeningBalanceItem(tx: Prisma.TransactionClient) {
   return item;
 }
 
-export async function getClients() {
+export async function getClients(options?: { includeArchived?: boolean }) {
   return prisma.client.findMany({
+    where: options?.includeArchived ? undefined : { isArchived: false },
     orderBy: { name: "asc" },
   });
 }
@@ -140,9 +141,39 @@ export async function updateClient(id: string, data: unknown) {
   return client;
 }
 
-export async function deleteClient(id: string) {
+export async function checkClientDeletionStatus(id: string): Promise<{
+  canDelete: boolean;
+  clientName: string;
+  reason?: string;
+}> {
   const client = await prisma.client.findUnique({ where: { id } });
-  if (!client) throw new Error("Клиент не найден");
+  if (!client) {
+    return { canDelete: false, clientName: "", reason: "Клиент не найден" };
+  }
+
+  const [salesCount, paymentsCount, financeCount] = await Promise.all([
+    prisma.sale.count({ where: { clientId: id } }),
+    prisma.payment.count({ where: { clientId: id } }),
+    prisma.financeEntry.count({ where: { relatedClientId: id } }),
+  ]);
+
+  if (salesCount > 0 || paymentsCount > 0 || financeCount > 0) {
+    return {
+      canDelete: false,
+      clientName: client.name,
+      reason: `У клиента "${client.name}" есть история операций (продажи, оплаты или финансы). Удаление невозможно.`,
+    };
+  }
+
+  return {
+    canDelete: true,
+    clientName: client.name,
+  };
+}
+
+export async function deleteClient(id: string): Promise<{ logId?: string; error?: string }> {
+  const client = await prisma.client.findUnique({ where: { id } });
+  if (!client) return { error: "Клиент не найден" };
 
   // Check transaction history: Sales, Payments, FinanceEntries
   const [salesCount, paymentsCount, financeCount] = await Promise.all([
@@ -152,12 +183,20 @@ export async function deleteClient(id: string) {
   ]);
 
   if (salesCount > 0 || paymentsCount > 0 || financeCount > 0) {
-    throw new Error(
-      "У клиента есть история операций (продажи, оплаты или финансы). Удаление невозможно."
-    );
+    return {
+      error: "У клиента есть история операций (продажи, оплаты или финансы). Удаление невозможно.",
+    };
   }
 
-  await prisma.client.delete({ where: { id } });
+  try {
+    await prisma.client.delete({ where: { id } });
+  } catch (e) {
+    // Catch any unexpected FK constraint violations (e.g. race condition or schema drift)
+    console.error("deleteClient Prisma error:", e);
+    return {
+      error: "Не удалось удалить клиента — возможно, есть связанные записи. Попробуйте позже.",
+    };
+  }
 
   const logId = await logAction({
     action: "DELETE",
@@ -181,12 +220,85 @@ export async function deleteClient(id: string) {
 }
 
 
+export async function archiveClient(id: string) {
+  const client = await prisma.client.findUnique({ where: { id } });
+  if (!client) throw new Error("Клиент не найден");
+
+  await prisma.client.update({
+    where: { id },
+    data: {
+      isArchived: true,
+      archivedAt: new Date(),
+    },
+  });
+
+  const logId = await logAction({
+    action: "ARCHIVE",
+    entity: "Client",
+    entityId: id,
+    description: `Архивирован клиент: ${client.name}`,
+    snapshot: {
+      id: client.id,
+      name: client.name,
+      phone: client.phone,
+      address: client.address,
+      district: client.district,
+      visitFrequency: client.visitFrequency,
+      isArchived: false,
+    },
+  });
+
+  revalidateAll();
+  return { logId };
+}
+
+export async function unarchiveClient(id: string) {
+  const client = await prisma.client.findUnique({ where: { id } });
+  if (!client) throw new Error("Клиент не найден");
+
+  await prisma.client.update({
+    where: { id },
+    data: {
+      isArchived: false,
+      archivedAt: null,
+    },
+  });
+
+  const logId = await logAction({
+    action: "UNARCHIVE",
+    entity: "Client",
+    entityId: id,
+    description: `Восстановлен из архива клиент: ${client.name}`,
+    snapshot: {
+      id: client.id,
+      name: client.name,
+      phone: client.phone,
+      address: client.address,
+      district: client.district,
+      visitFrequency: client.visitFrequency,
+      isArchived: true,
+    },
+  });
+
+  revalidateAll();
+  return { logId };
+}
+
 /**
  * Get all clients with their computed debt, last sale date,
  * and 30-day sales sum.
  */
-export async function getClientsWithDebt() {
+export async function getClientsWithDebt(options?: { tab?: "ACTIVE" | "ARCHIVED" | "ALL" }) {
+  const tab = options?.tab || "ACTIVE";
+  const where: Prisma.ClientWhereInput = {};
+  if (tab === "ACTIVE") {
+    where.isArchived = false;
+  } else if (tab === "ARCHIVED") {
+    where.isArchived = true;
+  }
+
   const clients = await prisma.client.findMany({
+    where,
     orderBy: { name: "asc" },
     select: {
       id: true,
@@ -195,6 +307,8 @@ export async function getClientsWithDebt() {
       address: true,
       district: true,
       visitFrequency: true,
+      isArchived: true,
+      archivedAt: true,
     },
   });
 

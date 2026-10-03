@@ -52,6 +52,8 @@ model Client {
   address         String?
   district        String?
   visitFrequency  Int?     // desired visit frequency in days
+  isArchived      Boolean  @default(false)
+  archivedAt      DateTime?
   createdAt       DateTime @default(now())
 
   sales          Sale[]

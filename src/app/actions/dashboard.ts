@@ -130,6 +130,7 @@ export async function getDashboardData(options?: DashboardOptions) {
       include: asOf ? { stockMovements: true } : undefined,
     }),
     prisma.client.findMany({
+      where: { isArchived: false },
       include: {
         sales: {
           where: asOfFilter ? { date: asOfFilter } : undefined,

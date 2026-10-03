@@ -2,11 +2,21 @@
 
 import { useState, useEffect, useTransition } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Plus, Edit, Trash2 } from "lucide-react";
+import { ArrowLeft, Plus, Edit, Trash2, Archive, RotateCcw } from "lucide-react";
 import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/Toast";
-import { getClient, getClientHistory, getClientDetailedStats, updateClient, deleteClient } from "@/app/actions/clients";
+import {
+  getClient,
+  getClientHistory,
+  getClientDetailedStats,
+  updateClient,
+  deleteClient,
+  checkClientDeletionStatus,
+  archiveClient,
+  unarchiveClient,
+} from "@/app/actions/clients";
 import { useLanguage } from "@/lib/i18n/context";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
@@ -35,6 +45,18 @@ export default function ClientDetailPage() {
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const { showToast } = useToast();
+
+  // Delete & Archive confirm dialog state
+  const [deleteConfirmState, setDeleteConfirmState] = useState<{
+    open: boolean;
+    canDelete: boolean;
+    message: string;
+  }>({
+    open: false,
+    canDelete: false,
+    message: "",
+  });
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
 
   // Edit client state
   const [editClientOpen, setEditClientOpen] = useState(false);
@@ -91,11 +113,58 @@ export default function ClientDetailPage() {
     });
   };
 
-  const handleDeleteClient = () => {
-    if (!confirm(`Вы уверены, что хотите удалить клиента "${client?.name}"?`)) return;
+  const handleArchive = () => {
     startTransition(async () => {
       try {
-        await deleteClient(clientId);
+        await archiveClient(clientId);
+        showToast("Клиент перемещён в архив");
+        loadData();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Ошибка архивации", "error");
+      }
+    });
+  };
+
+  const handleUnarchive = () => {
+    startTransition(async () => {
+      try {
+        await unarchiveClient(clientId);
+        showToast("Клиент возвращён из архива");
+        loadData();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Ошибка", "error");
+      }
+    });
+  };
+
+  const handleDeleteClick = async () => {
+    if (!client) return;
+    const status = await checkClientDeletionStatus(clientId);
+    if (!status.canDelete) {
+      setDeleteConfirmState({
+        open: true,
+        canDelete: false,
+        message:
+          status.reason ||
+          `У клиента "${client.name}" есть история операций (продажи, оплаты или финансы). Удаление невозможно.`,
+      });
+    } else {
+      setDeleteConfirmState({
+        open: true,
+        canDelete: true,
+        message: `Вы уверены, что хотите удалить клиента "${client.name}"? Это действие нельзя отменить.`,
+      });
+    }
+  };
+
+  const handleConfirmDelete = () => {
+    startTransition(async () => {
+      try {
+        const res = await deleteClient(clientId);
+        if (res.error) {
+          showToast(res.error, "error");
+          return;
+        }
         showToast("Клиент удалён");
         router.push("/debts");
       } catch (e) {
@@ -103,6 +172,7 @@ export default function ClientDetailPage() {
       }
     });
   };
+
 
   if (!client || !history || !stats) {
     return (
@@ -136,7 +206,16 @@ export default function ClientDetailPage() {
       </button>
 
       <PageHeader
-        title={client.name}
+        title={
+          <div className="flex items-center gap-2.5">
+            <span>{client.name}</span>
+            {client.isArchived && (
+              <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200/60 dark:border-amber-900/40">
+                В архиве
+              </span>
+            )}
+          </div>
+        }
         subtitle={client.phone || client.address || undefined}
         action={
           <div className="flex flex-wrap items-center gap-2">
@@ -148,10 +227,29 @@ export default function ClientDetailPage() {
             >
               <Edit size={16} /> Редактировать
             </Button>
+            {client.isArchived ? (
+              <Button
+                variant="outline"
+                size="md"
+                onClick={handleUnarchive}
+                className="gap-1.5 bg-teal-50 dark:bg-teal-950/30 text-teal-700 dark:text-teal-400 border-teal-200 dark:border-teal-900/50 hover:bg-teal-100"
+              >
+                <RotateCcw size={16} /> Вернуть из архива
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="md"
+                onClick={() => setArchiveConfirmOpen(true)}
+                className="gap-1.5 bg-slate-50 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 border-gray-200 dark:border-zinc-700 hover:bg-slate-100"
+              >
+                <Archive size={16} /> В архив
+              </Button>
+            )}
             <Button
               variant="destructive"
               size="md"
-              onClick={handleDeleteClient}
+              onClick={handleDeleteClick}
               className="gap-1.5 bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 border-rose-200 dark:border-rose-900/50"
             >
               <Trash2 size={16} /> Удалить
@@ -357,6 +455,50 @@ export default function ClientDetailPage() {
           </Button>
         </div>
       </ModalSheet>
+
+      <ConfirmDialog
+        open={deleteConfirmState.open}
+        title={deleteConfirmState.canDelete ? "Удаление клиента" : "Невозможно удалить клиента"}
+        message={deleteConfirmState.message}
+        confirmLabel={deleteConfirmState.canDelete ? "Удалить" : "Понятно"}
+        cancelLabel="Отмена"
+        destructive={deleteConfirmState.canDelete}
+        hideCancel={!deleteConfirmState.canDelete}
+        extraAction={
+          !deleteConfirmState.canDelete && !client.isArchived
+            ? {
+                label: "Архивировать вместо удаления",
+                variant: "primary",
+                onClick: () => {
+                  setDeleteConfirmState((prev) => ({ ...prev, open: false }));
+                  setArchiveConfirmOpen(true);
+                },
+              }
+            : undefined
+        }
+        onConfirm={() => {
+          const shouldDelete = deleteConfirmState.canDelete;
+          setDeleteConfirmState((prev) => ({ ...prev, open: false }));
+          if (shouldDelete) {
+            handleConfirmDelete();
+          }
+        }}
+        onCancel={() => setDeleteConfirmState((prev) => ({ ...prev, open: false }))}
+      />
+
+      <ConfirmDialog
+        open={archiveConfirmOpen}
+        title="Архивация клиента"
+        message={`Переместить клиента "${client.name}" в архив? Его долг перестанет учитываться в общих отчётах, но вся история сохранится.`}
+        confirmLabel="Архивировать"
+        cancelLabel="Отмена"
+        onConfirm={() => {
+          setArchiveConfirmOpen(false);
+          handleArchive();
+        }}
+        onCancel={() => setArchiveConfirmOpen(false)}
+      />
     </div>
   );
 }
+

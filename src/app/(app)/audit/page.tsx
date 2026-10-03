@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { TableRowSkeleton } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/Button";
 import { useToast } from "@/components/ui/Toast";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
 type AuditEntry = Awaited<ReturnType<typeof getAuditLogs>>[number];
 
@@ -21,6 +22,8 @@ const actionColors: Record<string, string> = {
   PRODUCE: "bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-400 border border-purple-200/50 dark:border-purple-900/40",
   RESTOCK: "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 border border-amber-200/50 dark:border-amber-900/40",
   WRITE_OFF: "bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-400 border border-orange-200/50 dark:border-orange-900/40",
+  ARCHIVE: "bg-slate-100 text-slate-700 dark:bg-slate-900/80 dark:text-slate-300 border border-slate-300 dark:border-slate-800",
+  UNARCHIVE: "bg-teal-50 text-teal-700 dark:bg-teal-950/40 dark:text-teal-400 border border-teal-200/50 dark:border-teal-900/40",
 };
 
 export default function AuditPage() {
@@ -29,6 +32,14 @@ export default function AuditPage() {
   const [isPending, startTransition] = useTransition();
   const [loading, setLoading] = useState(true);
   const { showToast } = useToast();
+
+  const [undoConfirmState, setUndoConfirmState] = useState<{
+    open: boolean;
+    log: AuditEntry | null;
+  }>({
+    open: false,
+    log: null,
+  });
 
   const loadData = () => {
     startTransition(async () => {
@@ -42,8 +53,14 @@ export default function AuditPage() {
     loadData();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleUndo = (log: AuditEntry) => {
-    if (!confirm(`Вы действительно хотите отменить действие: "${log.description}"?`)) return;
+  const handleUndoClick = (log: AuditEntry) => {
+    setUndoConfirmState({
+      open: true,
+      log,
+    });
+  };
+
+  const handleConfirmUndo = (log: AuditEntry) => {
     startTransition(async () => {
       try {
         await undoAction(log.id);
@@ -85,7 +102,13 @@ export default function AuditPage() {
             const time = new Date(log.createdAt);
             const timeStr = `${time.getHours().toString().padStart(2, "0")}:${time.getMinutes().toString().padStart(2, "0")}`;
             const canUndo =
-              (log.action === "CREATE" || log.action === "UPDATE" || log.action === "DELETE") &&
+              (log.action === "CREATE" ||
+                log.action === "UPDATE" ||
+                log.action === "DELETE" ||
+                log.action === "PRODUCE" ||
+                log.action === "WRITE_OFF" ||
+                log.action === "ARCHIVE" ||
+                log.action === "UNARCHIVE") &&
               !log.description.startsWith("Отмена действия");
 
             return (
@@ -120,7 +143,7 @@ export default function AuditPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => handleUndo(log)}
+                      onClick={() => handleUndoClick(log)}
                       disabled={isPending}
                       className="h-8 px-2.5 gap-1 text-xs text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-950/40"
                     >
@@ -136,6 +159,23 @@ export default function AuditPage() {
           })}
         </Table>
       )}
+
+      <ConfirmDialog
+        open={undoConfirmState.open}
+        title="Отмена действия"
+        message={`Вы уверены, что хотите отменить это действие?\n"${undoConfirmState.log?.description}"`}
+        confirmLabel="Отменить"
+        cancelLabel="Назад"
+        destructive={false}
+        onConfirm={() => {
+          const logToUndo = undoConfirmState.log;
+          setUndoConfirmState({ open: false, log: null });
+          if (logToUndo) {
+            handleConfirmUndo(logToUndo);
+          }
+        }}
+        onCancel={() => setUndoConfirmState({ open: false, log: null })}
+      />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useTransition } from "react";
-import { Plus, Wallet, Link as LinkIcon, Trash2, Download, CreditCard, Pencil } from "lucide-react";
+import { Plus, Wallet, Link as LinkIcon, Trash2, Download, CreditCard, Pencil, ArrowLeft, X } from "lucide-react";
 import { formatUZS, formatDateShort, formatDateInput } from "@/lib/format";
 import { ModalSheet } from "@/components/ui/ModalSheet";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
@@ -37,6 +37,7 @@ export default function FinancePage() {
   const { language, t } = useLanguage();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [filter, setFilter] = useState<"ALL" | "INCOME" | "EXPENSE">("ALL");
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [datePreset, setDatePreset] = useState<string>("ALL");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -91,7 +92,12 @@ export default function FinancePage() {
 
       const filterVal = filter === "ALL" ? undefined : filter;
       const [e, s, cats] = await Promise.all([
-        getFinanceEntries({ filter: filterVal, dateFrom: range.from || undefined, dateTo: range.to || undefined }),
+        getFinanceEntries({
+          filter: filterVal,
+          category: selectedCategory || undefined,
+          dateFrom: range.from || undefined,
+          dateTo: range.to || undefined,
+        }),
         getFinanceSummary({ dateFrom: range.from || undefined, dateTo: range.to || undefined }),
         getExpenseCategories(),
       ]);
@@ -104,7 +110,7 @@ export default function FinancePage() {
 
   useEffect(() => {
     loadData();
-  }, [filter, datePreset, customFrom, customTo]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filter, selectedCategory, datePreset, customFrom, customTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSubmit = () => {
     if (!formDesc.trim() || !formAmount || Number(formAmount) <= 0) return;
@@ -309,7 +315,10 @@ export default function FinancePage() {
       <div className="flex flex-wrap items-center gap-3">
         <SegmentedControl
           value={filter}
-          onChange={(v) => setFilter(v as typeof filter)}
+          onChange={(v) => {
+            setFilter(v as typeof filter);
+            if (v === "INCOME") setSelectedCategory(null);
+          }}
           options={[
             { value: "ALL", label: t("common.all") },
             { value: "INCOME", label: t("finance.income") },
@@ -330,22 +339,74 @@ export default function FinancePage() {
       {/* Task Group 4: Расходы по категориям breakdown */}
       {filter !== "INCOME" && expenseCategoriesList.length > 0 && (
         <section className="space-y-2.5">
-          <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400 px-1">
-            {language === "ru" ? "Расходы по категориям" : language === "uz" ? "Kategoriyalar bo'yicha xarajatlar" : "Expenses by Category"}
-          </h3>
+          <div className="flex items-center justify-between px-1">
+            <h3 className="text-xs font-extrabold uppercase tracking-wider text-gray-500 dark:text-zinc-400">
+              {language === "ru" ? "Расходы по категориям" : language === "uz" ? "Kategoriyalar bo'yicha xarajatlar" : "Expenses by Category"}
+            </h3>
+            {selectedCategory && (
+              <button
+                onClick={() => setSelectedCategory(null)}
+                className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+              >
+                <X size={13} /> {language === "ru" ? "Сбросить фильтр" : language === "uz" ? "Filtrni tozalash" : "Clear filter"}
+              </button>
+            )}
+          </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5">
-            {expenseCategoriesList.map(([cat, amount]) => (
-              <Card key={cat} className="p-3 bg-white dark:bg-[#131823] border border-gray-200/80 dark:border-zinc-800">
-                <div className="text-[11px] font-bold text-gray-500 dark:text-zinc-400 truncate mb-1" title={cat === "__UNCATEGORIZED__" ? t("common.noCategory") : t(`expenseCategories.${cat}`, cat)}>
-                  {cat === "__UNCATEGORIZED__" ? t("common.noCategory") : t(`expenseCategories.${cat}`, cat)}
-                </div>
-                <div className="text-sm font-extrabold text-rose-600 dark:text-rose-400 tabular-nums">
-                  {formatUZS(amount)} <span className="text-[10px] font-normal text-gray-400">{t("common.sum")}</span>
-                </div>
-              </Card>
-            ))}
+            {expenseCategoriesList.map(([cat, amount]) => {
+              const isSelected = selectedCategory === cat;
+              return (
+                <Card
+                  key={cat}
+                  onClick={() => setSelectedCategory(isSelected ? null : cat)}
+                  className={`p-3 cursor-pointer transition-all active:scale-[0.98] ${
+                    isSelected
+                      ? "bg-indigo-50/80 dark:bg-indigo-950/50 border-indigo-500/80 dark:border-indigo-500/80 ring-2 ring-indigo-500/20 shadow-xs"
+                      : "bg-white dark:bg-[#131823] border-gray-200/80 dark:border-zinc-800 hover:border-gray-300 dark:hover:border-zinc-700 hover:shadow-xs"
+                  }`}
+                >
+                  <div
+                    className={`text-[11px] font-bold truncate mb-1 ${
+                      isSelected ? "text-indigo-700 dark:text-indigo-300" : "text-gray-500 dark:text-zinc-400"
+                    }`}
+                    title={cat === "__UNCATEGORIZED__" ? t("common.noCategory") : t(`expenseCategories.${cat}`, cat)}
+                  >
+                    {cat === "__UNCATEGORIZED__" ? t("common.noCategory") : t(`expenseCategories.${cat}`, cat)}
+                  </div>
+                  <div className="text-sm font-extrabold text-rose-600 dark:text-rose-400 tabular-nums">
+                    {formatUZS(amount)} <span className="text-[10px] font-normal text-gray-400">{t("common.sum")}</span>
+                  </div>
+                </Card>
+              );
+            })}
           </div>
         </section>
+      )}
+
+      {/* Filtered Category Header Banner */}
+      {selectedCategory && (
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200/70 dark:border-indigo-900/50 rounded-2xl animate-in fade-in duration-150">
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={() => setSelectedCategory(null)}
+              className="p-1.5 rounded-lg bg-white dark:bg-zinc-800 text-gray-600 dark:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors shadow-2xs cursor-pointer inline-flex items-center gap-1 text-xs font-semibold"
+              title="Назад ко всем записям"
+            >
+              <ArrowLeft size={14} />
+              <span>{language === "ru" ? "Назад" : language === "uz" ? "Orqaga" : "Back"}</span>
+            </button>
+            <div className="text-sm font-bold text-gray-900 dark:text-white">
+              <span>{selectedCategory === "__UNCATEGORIZED__" ? t("common.noCategory") : t(`expenseCategories.${selectedCategory}`, selectedCategory)}</span>
+              <span className="text-gray-400 dark:text-zinc-500 font-normal ml-1.5 text-xs tabular-nums">
+                ({entries.length} {language === "ru" ? "операций" : language === "uz" ? "ta operatsiya" : "entries"})
+              </span>
+            </div>
+          </div>
+          <div className="text-sm font-extrabold text-rose-600 dark:text-rose-400 tabular-nums">
+            {language === "ru" ? "Всего: " : language === "uz" ? "Jami: " : "Total: "}
+            {formatUZS(summary.expenseByCategory?.[selectedCategory] || 0)} {t("common.sum")}
+          </div>
+        </div>
       )}
 
       {/* Finance Records Table */}

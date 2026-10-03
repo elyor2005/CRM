@@ -2,9 +2,17 @@
 
 import { useState, useEffect, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Users, Search, Plus, ArrowUpDown, ArrowUp, ArrowDown, Download, Edit, Trash2 } from "lucide-react";
+import { Users, Search, Plus, ArrowUpDown, ArrowUp, ArrowDown, Download, Edit, Trash2, Archive, RotateCcw } from "lucide-react";
 import { formatUZS, formatDateShort } from "@/lib/format";
-import { getClientsWithDebt, createClient, updateClient, deleteClient } from "@/app/actions/clients";
+import {
+  getClientsWithDebt,
+  createClient,
+  updateClient,
+  deleteClient,
+  checkClientDeletionStatus,
+  archiveClient,
+  unarchiveClient,
+} from "@/app/actions/clients";
 import { undoAction } from "@/app/actions/audit";
 import { useLanguage } from "@/lib/i18n/context";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -14,6 +22,8 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { TableRowSkeleton } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/Button";
 import { ModalSheet } from "@/components/ui/ModalSheet";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { Input } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Toast";
 import { formatDateInput } from "@/lib/format";
@@ -23,10 +33,12 @@ type ClientWithDebt = Awaited<ReturnType<typeof getClientsWithDebt>>[number];
 
 type SortField = "name" | "district" | "totalSalesValue" | "totalPaid" | "debt" | "lastSaleDate" | "status";
 type SortDir = "asc" | "desc";
+type ClientTab = "ACTIVE" | "ARCHIVED" | "ALL";
 
 export default function DebtsPage() {
   const { language, t } = useLanguage();
   const [clients, setClients] = useState<ClientWithDebt[]>([]);
+  const [clientTab, setClientTab] = useState<ClientTab>("ACTIVE");
   const [search, setSearch] = useState("");
   const [isPending, startTransition] = useTransition();
   const [loading, setLoading] = useState(true);
@@ -46,17 +58,18 @@ export default function DebtsPage() {
   const [formVisitFrequency, setFormVisitFrequency] = useState("");
   const [formOpeningDebt, setFormOpeningDebt] = useState("");
 
-  const loadData = () => {
+  const loadData = (tab: ClientTab = clientTab) => {
     startTransition(async () => {
-      const data = await getClientsWithDebt();
+      const data = await getClientsWithDebt({ tab });
       setClients(data);
       setLoading(false);
     });
   };
 
   useEffect(() => {
-    loadData();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    loadData(clientTab);
+  }, [clientTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   const filtered = clients.filter((c) =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -180,11 +193,48 @@ export default function DebtsPage() {
     });
   };
 
-  const handleDeleteClient = (c: ClientWithDebt) => {
-    if (!confirm(`Вы действительно хотите удалить клиента "${c.name}"?`)) return;
+  // Delete confirm dialog state
+  const [deleteConfirmState, setDeleteConfirmState] = useState<{
+    open: boolean;
+    client: ClientWithDebt | null;
+    canDelete: boolean;
+    message: string;
+  }>({
+    open: false,
+    client: null,
+    canDelete: false,
+    message: "",
+  });
+
+  const handleDeleteClick = async (c: ClientWithDebt) => {
+    const status = await checkClientDeletionStatus(c.id);
+    if (!status.canDelete) {
+      setDeleteConfirmState({
+        open: true,
+        client: c,
+        canDelete: false,
+        message:
+          status.reason ||
+          `У клиента "${c.name}" есть история операций (продажи, оплаты или финансы). Удаление невозможно.`,
+      });
+    } else {
+      setDeleteConfirmState({
+        open: true,
+        client: c,
+        canDelete: true,
+        message: `Вы уверены, что хотите удалить клиента "${c.name}"? Это действие нельзя отменить.`,
+      });
+    }
+  };
+
+  const handleConfirmDelete = (c: ClientWithDebt) => {
     startTransition(async () => {
       try {
         const res = await deleteClient(c.id);
+        if (res.error) {
+          showToast(res.error, "error");
+          return;
+        }
         loadData();
 
         const msg = language === "ru" ? `Клиент "${c.name}" удален` : language === "uz" ? `"${c.name}" mijozi o'chirildi` : `Client "${c.name}" deleted`;
@@ -211,6 +261,47 @@ export default function DebtsPage() {
         }
       } catch (e) {
         showToast(e instanceof Error ? e.message : "Ошибка удаления", "error");
+      }
+    });
+  };
+
+
+  // Archive confirm dialog state
+  const [archiveConfirmState, setArchiveConfirmState] = useState<{
+    open: boolean;
+    client: ClientWithDebt | null;
+  }>({
+    open: false,
+    client: null,
+  });
+
+  const handleArchiveClick = (c: ClientWithDebt) => {
+    setArchiveConfirmState({
+      open: true,
+      client: c,
+    });
+  };
+
+  const handleConfirmArchive = (c: ClientWithDebt) => {
+    startTransition(async () => {
+      try {
+        await archiveClient(c.id);
+        showToast("Клиент перемещён в архив");
+        loadData(clientTab);
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Ошибка архивации", "error");
+      }
+    });
+  };
+
+  const handleUnarchive = (c: ClientWithDebt) => {
+    startTransition(async () => {
+      try {
+        await unarchiveClient(c.id);
+        showToast("Клиент возвращён из архива");
+        loadData(clientTab);
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Ошибка", "error");
       }
     });
   };
@@ -292,15 +383,28 @@ export default function DebtsPage() {
         }
       />
 
-      {/* Search Input */}
-      <div className="relative max-w-md">
-        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-        <input
-          className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-[#1E2638] border border-gray-200/80 dark:border-zinc-800 rounded-xl text-base transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500/80 text-gray-900 dark:text-white"
-          placeholder={`${t("clients.title")}...`}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+      {/* Tabs & Search Input */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="w-full sm:w-auto max-w-xs">
+          <SegmentedControl
+            value={clientTab}
+            onChange={(v) => setClientTab(v as ClientTab)}
+            options={[
+              { value: "ACTIVE", label: "Активные" },
+              { value: "ARCHIVED", label: "В архиве" },
+              { value: "ALL", label: "Все" },
+            ]}
+          />
+        </div>
+        <div className="relative w-full sm:max-w-xs">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+          <input
+            className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-[#1E2638] border border-gray-200/80 dark:border-zinc-800 rounded-xl text-base sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500/80 text-gray-900 dark:text-white"
+            placeholder={`${t("clients.title")}...`}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
       </div>
 
       {/* Client List */}
@@ -337,7 +441,14 @@ export default function DebtsPage() {
                 onClick={() => router.push(`/debts/${client.id}`)}
               >
                 <td className="p-3.5 sm:p-4">
-                  <div className="font-extrabold text-gray-900 dark:text-white">{client.name}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-extrabold text-gray-900 dark:text-white">{client.name}</span>
+                    {client.isArchived && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200/60 dark:border-amber-900/40">
+                        Архив
+                      </span>
+                    )}
+                  </div>
                   {client.last30DaysSalesSum > 0 && (
                     <div className="text-xs text-gray-500 dark:text-zinc-400 tabular-nums">
                       30d: {formatUZS(client.last30DaysSalesSum)}
@@ -379,8 +490,25 @@ export default function DebtsPage() {
                     >
                       <Edit size={14} />
                     </button>
+                    {client.isArchived ? (
+                      <button
+                        onClick={() => handleUnarchive(client)}
+                        className="p-1.5 rounded-lg bg-teal-50 dark:bg-teal-950/40 text-teal-600 dark:text-teal-400 hover:bg-teal-100 dark:hover:bg-teal-900/60 transition-colors"
+                        title="Вернуть из архива"
+                      >
+                        <RotateCcw size={14} />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleArchiveClick(client)}
+                        className="p-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors"
+                        title="Архивировать"
+                      >
+                        <Archive size={14} />
+                      </button>
+                    )}
                     <button
-                      onClick={() => handleDeleteClient(client)}
+                      onClick={() => handleDeleteClick(client)}
                       className="p-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/60 transition-colors"
                       title="Удалить"
                     >
@@ -500,6 +628,57 @@ export default function DebtsPage() {
           </Button>
         </div>
       </ModalSheet>
+
+      <ConfirmDialog
+        open={deleteConfirmState.open}
+        title={deleteConfirmState.canDelete ? "Удаление клиента" : "Невозможно удалить клиента"}
+        message={deleteConfirmState.message}
+        confirmLabel={deleteConfirmState.canDelete ? "Удалить" : "Понятно"}
+        cancelLabel="Отмена"
+        destructive={deleteConfirmState.canDelete}
+        hideCancel={!deleteConfirmState.canDelete}
+        extraAction={
+          !deleteConfirmState.canDelete && !deleteConfirmState.client?.isArchived
+            ? {
+                label: "Архивировать вместо удаления",
+                variant: "primary",
+                onClick: () => {
+                  const clientToArchive = deleteConfirmState.client;
+                  setDeleteConfirmState((prev) => ({ ...prev, open: false }));
+                  if (clientToArchive) {
+                    setArchiveConfirmState({ open: true, client: clientToArchive });
+                  }
+                },
+              }
+            : undefined
+        }
+        onConfirm={() => {
+          const clientToDelete = deleteConfirmState.client;
+          const shouldDelete = deleteConfirmState.canDelete;
+          setDeleteConfirmState((prev) => ({ ...prev, open: false }));
+          if (shouldDelete && clientToDelete) {
+            handleConfirmDelete(clientToDelete);
+          }
+        }}
+        onCancel={() => setDeleteConfirmState((prev) => ({ ...prev, open: false }))}
+      />
+
+      <ConfirmDialog
+        open={archiveConfirmState.open}
+        title="Архивация клиента"
+        message={`Переместить клиента "${archiveConfirmState.client?.name}" в архив? Его долг перестанет учитываться в общих отчётах, но вся история сохранится.`}
+        confirmLabel="Архивировать"
+        cancelLabel="Отмена"
+        onConfirm={() => {
+          const clientToArchive = archiveConfirmState.client;
+          setArchiveConfirmState({ open: false, client: null });
+          if (clientToArchive) {
+            handleConfirmArchive(clientToArchive);
+          }
+        }}
+        onCancel={() => setArchiveConfirmState({ open: false, client: null })}
+      />
     </div>
   );
 }
+
